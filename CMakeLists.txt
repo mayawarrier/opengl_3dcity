@@ -5,24 +5,24 @@ project(3dcity)
 include(FetchContent)
 
 set(SOURCES 
-	"src/utils.hpp"
-	"src/utils.cpp"
+    "src/utils.hpp"
+    "src/utils.cpp"
     "src/shader.hpp"
     "src/shader.cpp"
-	"src/main.cpp")
+    "src/main.cpp")
 
 if (WIN32)
-	list(APPEND SOURCES 
-		"src/win32.hpp"
-		"src/win32.cpp")
+    list(APPEND SOURCES 
+        "src/win32.hpp"
+        "src/win32.cpp")
 endif()
 
 add_executable(3dcity "${SOURCES}")
 
 set_target_properties(3dcity PROPERTIES
-	CXX_STANDARD 20
-	CXX_STANDARD_REQUIRED YES
-	CXX_EXTENSIONS NO)
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED YES
+    CXX_EXTENSIONS NO)
 
 
 set(ASSET_SRCDIR "${CMAKE_SOURCE_DIR}/assets")
