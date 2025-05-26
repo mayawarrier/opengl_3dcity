@@ -4,6 +4,7 @@
       "name": "libosmium",
       "version>=": "2.22.0"
     },
-    "sdl2"
+    "sdl2",
+    "glm"
   ]
 }

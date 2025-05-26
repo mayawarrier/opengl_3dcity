@@ -7,8 +7,8 @@ include(FetchContent)
 set(SOURCES 
     "src/utils.hpp"
     "src/utils.cpp"
-    "src/shader.hpp"
-    "src/shader.cpp"
+    "src/glutils.hpp"
+    "src/glutils.cpp"
     "src/main.cpp")
 
 if (WIN32)
@@ -25,21 +25,26 @@ set_target_properties(3dcity PROPERTIES
     CXX_EXTENSIONS NO)
 
 
-set(ASSET_SRCDIR "${CMAKE_SOURCE_DIR}/assets")
-set(ASSET_BINDIR "${CMAKE_BINARY_DIR}/assets")
+#set(ASSET_SRCDIR "${CMAKE_SOURCE_DIR}/assets")
+#set(ASSET_BINDIR "${CMAKE_BINARY_DIR}/assets")
+#
+#file(GLOB_RECURSE ASSET_FILES "${ASSET_SRCDIR}/*")
 
-file(GLOB_RECURSE ASSET_FILES "${ASSET_SRCDIR}/*")
+#add_custom_command(
+#    OUTPUT "${CMAKE_BINARY_DIR}/assets.timestamp"
+#    BYPRODUCTS "${ASSET_BINDIR}"
+#    COMMAND "${CMAKE_COMMAND}" -E copy_directory "${ASSET_SRCDIR}" "${ASSET_BINDIR}"
+#    COMMAND "${CMAKE_COMMAND}" -E touch "${CMAKE_BINARY_DIR}/assets.timestamp"
+#    DEPENDS "${ASSET_FILES}"
+#    VERBATIM)
+#
+#add_custom_target(3dcity_assets DEPENDS "${CMAKE_BINARY_DIR}/assets.timestamp")
+#set_property(TARGET 3dcity_assets APPEND PROPERTY ADDITIONAL_CLEAN_FILES "${ASSET_BINDIR}") 
 
-add_custom_command(
-    OUTPUT "${CMAKE_BINARY_DIR}/assets.timestamp"
-    BYPRODUCTS "${ASSET_BINDIR}"
-    COMMAND "${CMAKE_COMMAND}" -E copy_directory "${ASSET_SRCDIR}" "${ASSET_BINDIR}"
-    COMMAND "${CMAKE_COMMAND}" -E touch "${CMAKE_BINARY_DIR}/assets.timestamp"
-    DEPENDS "${ASSET_FILES}"
+add_custom_target(3dcity_assets
+    COMMAND "${CMAKE_COMMAND}" "-DSRC_DIR=${CMAKE_SOURCE_DIR}" 
+        "-DDST_DIR=${CMAKE_BINARY_DIR}" -P "${CMAKE_SOURCE_DIR}/CopyAssets.cmake"
     VERBATIM)
-
-add_custom_target(3dcity_assets DEPENDS "${CMAKE_BINARY_DIR}/assets.timestamp")
-set_property(TARGET 3dcity_assets APPEND PROPERTY ADDITIONAL_CLEAN_FILES "${ASSET_BINDIR}") 
 
 add_dependencies(3dcity 3dcity_assets)
 
@@ -61,5 +66,9 @@ target_link_libraries(3dcity
 
 
 add_subdirectory("third_party/glad")
-
 target_link_libraries(3dcity PRIVATE glad)
+
+target_include_directories(3dcity PRIVATE "third_party/stb/include")
+
+find_package(glm CONFIG REQUIRED)
+target_link_libraries(3dcity PRIVATE glm::glm-header-only)

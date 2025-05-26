@@ -2,7 +2,11 @@
 #include <string>
 #include "glad/glad.h"
 
-#include "shader.hpp"
+#define STBI_WINDOWS_UTF8 1
+#define STB_IMAGE_IMPLEMENTATION 1
+#include "stb/stb_image.h"
+
+#include "glutils.hpp"
 
 
 bool gl_load_shader(const fs::path& path, GLenum shader_type, unsigned& out_shader)
@@ -66,7 +70,15 @@ static bool gl_link_program(unsigned program)
     return true;
 }
 
-bool gl_create_program(const unsigned* shaders, int num_shaders, unsigned& out_program)
+static void gl_delete_all_shaders(unsigned program, const unsigned* shaders, int num_shaders)
+{
+    for (int i = 0; i < num_shaders; ++i) {
+        glDetachShader(program, shaders[i]);
+        glDeleteShader(shaders[i]);
+    }
+}
+
+bool gl_make_program(const unsigned* shaders, int num_shaders, unsigned& out_program)
 {
     unsigned program = glCreateProgram();
     for (int i = 0; i < num_shaders; ++i) {
@@ -77,10 +89,10 @@ bool gl_create_program(const unsigned* shaders, int num_shaders, unsigned& out_p
         glDeleteProgram(program);
         return false;
     }
-
     for (int i = 0; i < num_shaders; ++i) {
         glDetachShader(program, shaders[i]);
     }
+
     out_program = program;
     return true;
 }
@@ -94,14 +106,10 @@ bool gl_load_program(const shaderinfo* shader_info, int num_shaders, unsigned& o
     {
         if (!gl_load_shader(shader_info[i].path, shader_info[i].type, shaders[i]))
         {
-            for (int j = 0; j < i; ++j) {
-                glDetachShader(program, shaders[j]);
-                glDeleteShader(shaders[j]);
-            }
+            gl_delete_all_shaders(program, shaders.get(), i);
             glDeleteProgram(program);
             return false;
         }
-
         glAttachShader(program, shaders[i]);
     }
 
@@ -109,11 +117,63 @@ bool gl_load_program(const shaderinfo* shader_info, int num_shaders, unsigned& o
         glDeleteProgram(program);
         return false;
     }
-
-    for (int i = 0; i < num_shaders; ++i) {
-        glDetachShader(program, shaders[i]);
-        glDeleteShader(shaders[i]);
-    }
+    gl_delete_all_shaders(program, shaders.get(), num_shaders);
+    
     out_program = program;
+    return true;
+}
+
+bool gl_load_texture2d(const fs::path& path, unsigned& out_texture)
+{
+    unsigned texture;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
+    auto pathstr = path.string();
+
+    int actual_channels;
+    if (!stbi_info(pathstr.c_str(), nullptr, nullptr, &actual_channels)) {
+        logERROR("stbi_info() failed for file %s: %s", pathstr.c_str(), stbi_failure_reason());
+        glDeleteTextures(1, &texture);
+        return false;
+    }
+
+    int width, height;
+    int load_channels = std::clamp(actual_channels, 3, 4);
+    
+    unsigned char* image;
+    stbi_set_flip_vertically_on_load(1);
+    {
+        image = stbi_load(pathstr.c_str(), &width, &height, nullptr, load_channels);
+        if (!image) {
+            logERROR("stbi_load() failed for file %s: %s", pathstr.c_str(), stbi_failure_reason());
+            stbi_set_flip_vertically_on_load(0);
+            glDeleteTextures(1, &texture);
+            return false;
+        }
+    }
+    stbi_set_flip_vertically_on_load(0);
+
+    GLenum texformat, imgformat;
+    if (load_channels == 3) {
+        texformat = GL_RGB8;
+        imgformat = GL_RGB;
+    } else {
+        assert(load_channels == 4);
+        texformat = GL_RGBA8;
+        imgformat = GL_RGBA;
+    }
+
+    glTexImage2D(GL_TEXTURE_2D, 0, texformat, width, height, 0, imgformat, GL_UNSIGNED_BYTE, image);
+    glGenerateMipmap(GL_TEXTURE_2D); // all levels
+
+    stbi_image_free(image);
+
+    out_texture = texture;
     return true;
 }
