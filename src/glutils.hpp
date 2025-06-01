@@ -4,21 +4,81 @@
 #include "utils.hpp"
 
 
-bool gl_load_shader(const fs::path& path, GLenum shader_type, unsigned& out_shader);
+#define GL_CLASS(classname, handlename)                                             \
+    classname(const classname&) = delete;                                           \
+    classname& operator=(const classname&) = delete;                                \
+                                                                                    \
+    classname(classname&& rhs) noexcept :                                           \
+        handlename(std::exchange(rhs.handlename, 0))                                \
+    {}                                                                              \
+    classname& operator=(classname&& rhs) noexcept {                                \
+        if (this != &rhs) { handlename = std::exchange(rhs.handlename, 0); }        \
+        return *this;                                                               \
+    }                                                                               \
+    bool ok() const noexcept { return handlename != 0; }                            \
+    unsigned handle() const noexcept { return handlename; }
 
-bool gl_make_program(const unsigned* shaders, int num_shaders, unsigned& out_program);
 
-struct shaderinfo
+class texture2d
 {
-    fs::path path;
-    GLenum type;
+public:
+    texture2d(const fs::path& path);
+
+    GL_CLASS(texture2d, m_handle)
+
+    ~texture2d() noexcept;
+
+private:
+    unsigned m_handle;
 };
-bool gl_load_program(const shaderinfo* shaders, int num_shaders, unsigned& out_program);
 
+class shaderstage
+{
+public:
+    struct info
+    {
+        fs::path path;
+        GLenum type;
+    };
 
-// add texture params later (probably from ini file)
+public:
+    shaderstage(const fs::path& path, GLenum type);
+    shaderstage(const info& info) : 
+        shaderstage(info.path, info.type) 
+    {}
 
-bool gl_load_texture2d(const fs::path& path, unsigned& out_texture);
+    GL_CLASS(shaderstage, m_handle)
 
+    ~shaderstage() noexcept;
+
+private:
+    unsigned m_handle;
+};
+
+class shader
+{
+public:
+    shader(const shaderstage::info* stages, int num_stages);
+    shader(const shaderstage* stages, int num_stages);
+
+    GL_CLASS(shader, m_handle);
+
+    int get_uniform_loc(const char* name) {
+        return glGetUniformLocation(m_handle, name);
+    }
+
+    void bind_texture(int location, int texunit, const texture2d& tex) {
+        glActiveTexture(GL_TEXTURE0 + texunit);
+        glBindTexture(GL_TEXTURE_2D, tex.handle());
+        glUniform1i(location, texunit);
+    }
+
+    void use() { glUseProgram(m_handle); }
+    
+    ~shader() noexcept;
+
+private:
+    unsigned m_handle;
+};
 
 #endif

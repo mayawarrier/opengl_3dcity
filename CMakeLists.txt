@@ -9,12 +9,18 @@ set(SOURCES
     "src/utils.cpp"
     "src/glutils.hpp"
     "src/glutils.cpp"
+    "src/viewport.hpp"
+    "src/viewport.cpp"
     "src/main.cpp")
 
 if (WIN32)
     list(APPEND SOURCES 
         "src/win32.hpp"
         "src/win32.cpp")
+endif()
+
+if (CMAKE_GENERATOR MATCHES "Visual Studio")
+    list(APPEND SOURCES "src/cpp.hint")
 endif()
 
 add_executable(3dcity "${SOURCES}")
@@ -52,7 +58,7 @@ add_dependencies(3dcity 3dcity_assets)
 if (MINGW)
     target_link_options(3dcity PRIVATE "-Wl,-subsystem,windows")
 elseif (WIN32)
-    target_link_options(3dcity PRIVATE "/SUBSYSTEM:WINDOWS")
+    #target_link_options(3dcity PRIVATE "/SUBSYSTEM:WINDOWS")
 endif()
 
 find_path(OSMIUM_INCLUDE_DIRS "osmium/version.hpp")

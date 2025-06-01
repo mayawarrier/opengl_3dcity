@@ -3,6 +3,7 @@
 #define UTILS_HPP
 
 #include <cstdio>
+#include <utility>
 #include <algorithm>
 #include <filesystem>
 #include <charconv>
@@ -13,7 +14,6 @@
 #include <unordered_map>
 #include <optional>
 #include <initializer_list>
-
 #include <SDL.h>
 
 
@@ -45,6 +45,10 @@ namespace tim = std::chrono;
 using clk = tim::steady_clock;
 using uint = unsigned int;
 
+struct size
+{
+    int width, height;
+};
 
 using file_ptr = std::unique_ptr<std::FILE, int(*)(std::FILE*)>;
 
@@ -102,6 +106,17 @@ constexpr SDL_Point sdl_ptadd(SDL_Point a, SDL_Point b)
 constexpr SDL_Point sdl_ptsub(SDL_Point a, SDL_Point b)
 {
     return { a.x - b.x, a.y - b.y };
+}
+
+constexpr float wrap_angle(float angle)
+{
+    if (angle >= 360.f) {
+        angle -= 360.f;
+    }
+    else if (angle <= 0) {
+        angle += 360.f;
+    }
+    return angle;
 }
 
 template <typename = void>

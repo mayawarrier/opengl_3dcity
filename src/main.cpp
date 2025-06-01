@@ -13,69 +13,8 @@
 
 #include "utils.hpp"
 #include "glutils.hpp"
+#include "viewport.hpp"
 
-struct window
-{
-    const char* name;
-    int width, height; // assume this does not change
-    SDL_Window* handle;
-    SDL_GLContext glcontext;
-};
-
-void window_destroy(window& wnd)
-{
-    if (wnd.glcontext) {
-        SDL_GL_DeleteContext(wnd.glcontext);
-    }
-    if (wnd.handle) {
-        SDL_DestroyWindow(wnd.handle);
-    }
-}
-
-bool window_create(window& wnd, const char* name, const char* title, int width, int height)
-{
-    wnd.name = name;
-    wnd.width = width;
-    wnd.height = height;
-
-    logMESSAGE("Initializing %s", name);
-
-    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-
-    wnd.handle = SDL_CreateWindow(title, 
-        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, width, height, SDL_WINDOW_OPENGL);
-    if (!wnd.handle) {
-        logERROR("SDL_CreateWindow(): %s", SDL_GetError());
-        window_destroy(wnd);
-        return false;
-    }
-
-    wnd.glcontext = SDL_GL_CreateContext(wnd.handle);
-    if (!wnd.glcontext) {
-        logERROR("SDL_GL_CreateContext(): %s", SDL_GetError());
-        window_destroy(wnd);
-        return false;
-    }
-
-    // todo: on Windows, GL func pointers are only valid
-    // for the context they were loaded in. If multiple windows
-    // are required, I might need glad2 to get multi-context support
-    gladLoadGLLoader(SDL_GL_GetProcAddress);
-    logMESSAGE("OpenGL Vendor:   %s", glGetString(GL_VENDOR));
-    logMESSAGE("OpenGL Renderer: %s", glGetString(GL_RENDERER));
-    logMESSAGE("OpenGL Version:  %s", glGetString(GL_VERSION));
-
-    if (SDL_GL_SetSwapInterval(1) != 0) {
-        logERROR("SDL_GL_SetSwapInterval(): %s", SDL_GetError());
-        window_destroy(wnd);
-        return false;
-    }
-
-    return true;
-}
 
 int main(int argc, char* argv[]) 
 {
@@ -93,47 +32,31 @@ int main(int argc, char* argv[])
         return -1;
     }
 
-    window wnd;
-    if (!window_create(wnd, "MAIN_WINDOW", "3D City", 750, 750)) {
+    window wnd("MAIN_WINDOW", "3D City", 750, 750);
+    if (!wnd.ok()) {
         return -1;
     }
 
-    shaderinfo shaders[2] = {
+    shaderstage::info shader_stages[2] = {
         { "assets/shaders/vertex.vert", GL_VERTEX_SHADER },
         { "assets/shaders/fragment.frag", GL_FRAGMENT_SHADER }
     };
-    unsigned shader_prog;
-    if (!gl_load_program(shaders, 2, shader_prog)) {
-        window_destroy(wnd);
+    shader shader(shader_stages, 2);
+    if (!shader.ok()) {
         return -1;
     }
 
-    unsigned containertex;
-    if (!gl_load_texture2d("assets/textures/container.jpg", containertex)) {
-        glDeleteShader(shader_prog);
-        window_destroy(wnd);
+    texture2d containertex("assets/textures/container.jpg");
+    if (!containertex.ok()) {
         return -1;
     }
 
-    unsigned logotex;
-    if (!gl_load_texture2d("assets/textures/Opengl-logo.png", logotex)) {
-        glDeleteTextures(1, &containertex);
-        glDeleteShader(shader_prog);
-        window_destroy(wnd);
+    texture2d logotex("assets/textures/Opengl-logo.png");
+    if (!logotex.ok()) {
         return -1;
     }
 
-    //float vertices[] = {
-    //    // positions           // texture coords
-    //     0.5f,  0.5f, 0.0f,    1.0f, 1.0f,  // top right
-    //     0.5f, -0.5f, 0.0f,    1.0f, 0.0f,  // bottom right
-    //    -0.5f, -0.5f, 0.0f,    0.0f, 0.0f,  // bottom left
-    //    -0.5f,  0.5f, 0.0f,    0.0f, 1.0f,  // top left 
-    //};
-    //unsigned int indices[] = {
-    //    0, 1, 3,   // first triangle
-    //    1, 2, 3    // second triangle
-    //};
+    glEnable(GL_DEPTH_TEST);
 
     float vertices[] = {
         -0.5f, -0.5f, -0.5f,   0.0f, 0.0f,
@@ -203,26 +126,9 @@ int main(int argc, char* argv[])
     }
     glBindVertexArray(0);
 
-    int texture0_loc = glGetUniformLocation(shader_prog, "texture0");
-    int texture1_loc = glGetUniformLocation(shader_prog, "texture1");
-    //int transform_loc = glGetUniformLocation(shader_prog, "transform");
-
-    int model_loc = glGetUniformLocation(shader_prog, "model");
-    int view_loc = glGetUniformLocation(shader_prog, "view");
-    int proj_loc = glGetUniformLocation(shader_prog, "projection");
-
-    //std::pair<glm::vec3, glm::vec3> cubes[] = {
-    //    { glm::vec3(0.0f,  0.0f,  0.0f),   glm::sphericalRand(1.0f) },
-    //    { glm::vec3(2.0f,  5.0f, -15.0f),  glm::sphericalRand(1.0f) },
-    //    { glm::vec3(-1.5f, -2.2f, -2.5f),  glm::sphericalRand(1.0f) },
-    //    { glm::vec3(-3.8f, -2.0f, -12.3f), glm::sphericalRand(1.0f) },
-    //    { glm::vec3(2.4f, -0.4f, -3.5f),   glm::sphericalRand(1.0f) },
-    //    { glm::vec3(-1.7f,  3.0f, -7.5f),  glm::sphericalRand(1.0f) },
-    //    { glm::vec3(1.3f, -2.0f, -2.5f),   glm::sphericalRand(1.0f) },
-    //    { glm::vec3(1.5f,  2.0f, -2.5f),   glm::sphericalRand(1.0f) },
-    //    { glm::vec3(1.5f,  0.2f, -1.5f),   glm::sphericalRand(1.0f) },
-    //    { glm::vec3(-1.3f,  1.0f, -1.5f),  glm::sphericalRand(1.0f) },
-    //};
+    int texture0_loc = shader.get_uniform_loc("texture0");
+    int texture1_loc = shader.get_uniform_loc("texture1");
+    int mvp_loc = shader.get_uniform_loc("MVP");
 
     constexpr int num_cubes = 30;
     auto cubes = std::make_unique<std::pair<glm::vec3, glm::vec3>[]>(num_cubes);
@@ -233,16 +139,25 @@ int main(int argc, char* argv[])
         cubes[i].second = glm::sphericalRand(1.0f);
     }
 
-    //glm::mat4 init_model(1.0f);
-    //init_model = glm::rotate(init_model, glm::radians(-55.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+    edit_camera camera;
 
-    glm::mat4 projection = glm::perspective(glm::radians(45.0f), float(wnd.width) / wnd.height, 0.1f, 100.0f);
+    glm::mat4 projection = glm::perspective(glm::radians(45.0f), wnd.aspect_ratio(), 0.001f, 100.0f);
 
-    glEnable(GL_DEPTH_TEST);
+    uint64_t last_ticks = 0;
+
+    SDL_SetRelativeMouseMode(SDL_TRUE);
 
     bool quit = false;
     while (!quit)
     {
+        uint64_t cur_ticks = SDL_GetTicks64();
+        uint64_t delta_ticks = cur_ticks - last_ticks;
+        last_ticks = cur_ticks;
+
+        camera.new_frame();
+
+        // todo: for multiple windows, events should be sent based on window ID
+        // Each window would receive events via process_event
         SDL_Event event;
         while (SDL_PollEvent(&event))
         {
@@ -252,9 +167,19 @@ int main(int argc, char* argv[])
                 quit = true;
                 break;
 
+            case SDL_KEYDOWN:
+                if (event.key.keysym.sym == SDLK_ESCAPE) {
+                    quit = true;
+                }
+                break;
+
             default: break;
             }
+
+            camera.process_event(event);
         }
+
+        camera.update();
 
         double time = double(SDL_GetTicks64()) / 1000;
         float sin_curve = float((std::sin(time) + 1.0) / 2.0);
@@ -262,80 +187,40 @@ int main(int argc, char* argv[])
         glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         
-        glUseProgram(shader_prog);
-
-        //float color = sin_curve;
-        //glUniform4f(color_uniform_loc, 0.f, color, 0.f, 1.f);
-
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, containertex);
-        glUniform1i(texture0_loc, 0);
-        
-        glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, logotex);
-        glUniform1i(texture1_loc, 1);
+        shader.use();
+        shader.bind_texture(texture0_loc, 0, containertex);
+        shader.bind_texture(texture1_loc, 1, logotex);
 
         glBindVertexArray(VAO);
         {
-            //glm::mat4 trans(1.0f);
-            //trans = glm::translate(trans, glm::vec3(0.5f, -0.5f, 0.0f));
-            //trans = glm::rotate(trans, float(time), glm::vec3(0.0f, 0.0f, 1.0));
-            //
-            //glUniformMatrix4fv(transform_loc, 1, GL_FALSE, glm::value_ptr(trans));
-            //
-            //glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-            //
-            //glm::mat4 trans2(1.0f);
-            //trans2 = glm::translate(trans2, glm::vec3(-0.5f, 0.5f, 0.0f));
-            //trans2 = glm::scale(trans2, sin_curve * glm::vec3(1.0f, 1.0f, 1.0f));
-            //
-            //glUniformMatrix4fv(transform_loc, 1, GL_FALSE, glm::value_ptr(trans2));
-            //
-            //glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-
-            glm::mat4 view(1.0f);
-            view = glm::rotate(view, -float(time), glm::normalize(glm::vec3(0.1f, 0.0f, 1.0f)));
-            view = glm::translate(view, glm::vec3(0.0f, 0.0f, -10.0f));
-            
-            view = glm::rotate(view, glm::radians(45.0f), glm::vec3(1.0f, 0.0f, 0.0f));
-            
-            
-
             for (int i = 0; i < num_cubes; ++i)
             {
                 glm::mat4 model(1.0f);
-                model = glm::rotate(model, float(time), glm::vec3(0.0f, 1.0f, 0.0f));
                 model = glm::translate(model, cubes[i].first);
                 model = glm::rotate(model, float(time), cubes[i].second);
                 model = glm::scale(model, glm::vec3(0.5f, 0.5f, 0.5f));
-                //glm::vec3(1.0f, 1.0f, 0.0f));
 
-                glUniformMatrix4fv(model_loc, 1, GL_FALSE, glm::value_ptr(model));
-                glUniformMatrix4fv(view_loc, 1, GL_FALSE, glm::value_ptr(view));
-                glUniformMatrix4fv(proj_loc, 1, GL_FALSE, glm::value_ptr(projection));
+                glm::mat4 mvp = projection * camera.view() * model;
+                glUniformMatrix4fv(mvp_loc, 1, GL_FALSE, glm::value_ptr(mvp));
 
                 glDrawArrays(GL_TRIANGLES, 0, 36);
             }
 
             glm::mat4 model(1.0f);
             model = glm::scale(model, glm::vec3(2.0f, 2.0f, 2.0f));
-            glUniformMatrix4fv(model_loc, 1, GL_FALSE, glm::value_ptr(model));
-            glDrawArrays(GL_TRIANGLES, 0, 36);
 
-            //glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+            glm::mat4 mvp = projection * camera.view() * model;
+            glUniformMatrix4fv(mvp_loc, 1, GL_FALSE, glm::value_ptr(mvp));
+            glDrawArrays(GL_TRIANGLES, 0, 36);
         }
         glBindVertexArray(0);
 
-        SDL_GL_SwapWindow(wnd.handle);
+        wnd.update();
     }
 
     glDeleteVertexArrays(1, &VAO);
     glDeleteBuffers(1, &VBO);
     glDeleteBuffers(1, &EBO);
-    glDeleteProgram(shader_prog);
-    glDeleteTextures(1, &containertex);
-    glDeleteTextures(1, &logotex);
 
-    window_destroy(wnd);
     return 0;
 }

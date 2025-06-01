@@ -9,7 +9,7 @@
 #include "glutils.hpp"
 
 
-bool gl_load_shader(const fs::path& path, GLenum shader_type, unsigned& out_shader)
+static bool gl_load_shader(const fs::path& path, GLenum shader_type, unsigned& out_shader)
 {
     size_t filesize;
     std::unique_ptr<char[]> filedata;
@@ -78,7 +78,7 @@ static void gl_delete_all_shaders(unsigned program, const unsigned* shaders, int
     }
 }
 
-bool gl_make_program(const unsigned* shaders, int num_shaders, unsigned& out_program)
+static bool gl_make_program(const unsigned* shaders, int num_shaders, unsigned& out_program)
 {
     unsigned program = glCreateProgram();
     for (int i = 0; i < num_shaders; ++i) {
@@ -97,7 +97,7 @@ bool gl_make_program(const unsigned* shaders, int num_shaders, unsigned& out_pro
     return true;
 }
 
-bool gl_load_program(const shaderinfo* shader_info, int num_shaders, unsigned& out_program)
+static bool gl_load_program(const shaderstage::info* shader_info, int num_shaders, unsigned& out_program)
 {
     unsigned program = glCreateProgram();
 
@@ -123,7 +123,9 @@ bool gl_load_program(const shaderinfo* shader_info, int num_shaders, unsigned& o
     return true;
 }
 
-bool gl_load_texture2d(const fs::path& path, unsigned& out_texture)
+// todo: perf: if this is called 100-1000s of times, it would be better
+// to glGen all the textures upfront, instead of one at a time 
+static bool gl_load_texture2d(const fs::path& path, unsigned& out_texture)
 {
     unsigned texture;
     glGenTextures(1, &texture);
@@ -177,3 +179,30 @@ bool gl_load_texture2d(const fs::path& path, unsigned& out_texture)
     out_texture = texture;
     return true;
 }
+
+shaderstage::shaderstage(const fs::path& path, GLenum type) : m_handle(0)
+{
+    gl_load_shader(path, type, m_handle);
+}
+
+shaderstage::~shaderstage() noexcept { glDeleteShader(m_handle); }
+
+shader::shader(const shaderstage::info* stages, int num_stages) : m_handle(0)
+{
+    gl_load_program(stages, num_stages, m_handle);
+}
+
+shader::shader(const shaderstage* stages, int num_stages) : m_handle(0)
+{
+    // todo: cast here is bad, obviously
+    gl_make_program((const unsigned*)stages, num_stages, m_handle);
+}
+
+shader::~shader() noexcept { glDeleteProgram(m_handle); }
+
+texture2d::texture2d(const fs::path& path) : m_handle(0)
+{
+    gl_load_texture2d(path, m_handle);
+}
+
+texture2d::~texture2d() noexcept { glDeleteTextures(1, &m_handle); }
