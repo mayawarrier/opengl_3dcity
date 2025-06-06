@@ -31,22 +31,6 @@ set_target_properties(3dcity PROPERTIES
     CXX_EXTENSIONS NO)
 
 
-#set(ASSET_SRCDIR "${CMAKE_SOURCE_DIR}/assets")
-#set(ASSET_BINDIR "${CMAKE_BINARY_DIR}/assets")
-#
-#file(GLOB_RECURSE ASSET_FILES "${ASSET_SRCDIR}/*")
-
-#add_custom_command(
-#    OUTPUT "${CMAKE_BINARY_DIR}/assets.timestamp"
-#    BYPRODUCTS "${ASSET_BINDIR}"
-#    COMMAND "${CMAKE_COMMAND}" -E copy_directory "${ASSET_SRCDIR}" "${ASSET_BINDIR}"
-#    COMMAND "${CMAKE_COMMAND}" -E touch "${CMAKE_BINARY_DIR}/assets.timestamp"
-#    DEPENDS "${ASSET_FILES}"
-#    VERBATIM)
-#
-#add_custom_target(3dcity_assets DEPENDS "${CMAKE_BINARY_DIR}/assets.timestamp")
-#set_property(TARGET 3dcity_assets APPEND PROPERTY ADDITIONAL_CLEAN_FILES "${ASSET_BINDIR}") 
-
 add_custom_target(3dcity_assets
     COMMAND "${CMAKE_COMMAND}" "-DSRC_DIR=${CMAKE_SOURCE_DIR}" 
         "-DDST_DIR=${CMAKE_BINARY_DIR}" -P "${CMAKE_SOURCE_DIR}/CopyAssets.cmake"
@@ -58,11 +42,29 @@ add_dependencies(3dcity 3dcity_assets)
 if (MINGW)
     target_link_options(3dcity PRIVATE "-Wl,-subsystem,windows")
 elseif (WIN32)
-    #target_link_options(3dcity PRIVATE "/SUBSYSTEM:WINDOWS")
+    target_link_options(3dcity PRIVATE "/SUBSYSTEM:WINDOWS")
 endif()
+
+if (WIN32)
+    target_compile_definitions(3dcity PUBLIC NOMINMAX)
+endif()
+
+# -------------------------------- OSMIUM ------------------------------------
 
 find_path(OSMIUM_INCLUDE_DIRS "osmium/version.hpp")
 target_include_directories(3dcity PRIVATE ${OSMIUM_INCLUDE_DIRS})
+
+find_package(BZip2 REQUIRED)
+target_link_libraries(3dcity PRIVATE BZip2::BZip2)
+
+find_package(ZLIB REQUIRED)
+target_link_libraries(3dcity PRIVATE ZLIB::ZLIB)
+
+find_package(EXPAT REQUIRED)
+target_link_libraries(3dcity PUBLIC EXPAT::EXPAT)
+
+# -----------------------------------------------------------------------------
+
 
 find_package(SDL2 CONFIG REQUIRED)
 target_link_libraries(3dcity

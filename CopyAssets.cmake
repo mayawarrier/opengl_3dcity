@@ -1,39 +1,24 @@
 
-file(GLOB SHADER_FILES 
-    LIST_DIRECTORIES false 
-    "${SRC_DIR}/assets/shaders/*")
-
-file(GLOB TEXTURE_FILES 
-    LIST_DIRECTORIES false 
-    "${SRC_DIR}/assets/textures/*")
-
+set(ASSETS_SRC_DIR "${SRC_DIR}/assets")
+set(ASSETS_DST_DIR "${DST_DIR}/assets")
 set(ASSET_TIMESTAMP_FILE "${DST_DIR}/assets.timestamp")
-set(SHADERS_DESTDIR "${DST_DIR}/assets/shaders")
-set(TEXTURES_DESTDIR "${DST_DIR}/assets/textures")
 
-file(MAKE_DIRECTORY 
-    "${SHADERS_DESTDIR}"
-    "${TEXTURES_DESTDIR}")
+file(MAKE_DIRECTORY "${ASSETS_DST_DIR}")
 
-foreach(SHADER_FILE IN LISTS SHADER_FILES)
-    get_filename_component(SHADER_FILENAME "${SHADER_FILE}" NAME)
+file(GLOB_RECURSE ASSET_FILES
+    RELATIVE "${ASSETS_SRC_DIR}"
+    "${ASSETS_SRC_DIR}/*")
 
-    if (NOT EXISTS "${SHADERS_DESTDIR}/${SHADER_FILENAME}" OR 
-        "${SHADER_FILE}" IS_NEWER_THAN "${ASSET_TIMESTAMP_FILE}")
+foreach(REL_PATH IN LISTS ASSET_FILES)
+    set(SRC_FILE "${ASSETS_SRC_DIR}/${REL_PATH}")
+    set(DST_FILE "${ASSETS_DST_DIR}/${REL_PATH}")
+    get_filename_component(FILE_DST_DIR "${DST_FILE}" DIRECTORY)
 
-        message(STATUS "Copying ${SHADER_FILE}")
-        file(COPY "${SHADER_FILE}" DESTINATION "${SHADERS_DESTDIR}")
-    endif()
-endforeach()
+    file(MAKE_DIRECTORY "${FILE_DST_DIR}")
 
-foreach(TEXTURE_FILE IN LISTS TEXTURE_FILES)
-    get_filename_component(TEXTURE_FILENAME "${TEXTURE_FILE}" NAME)    
-
-    if (NOT EXISTS "${TEXTURES_DESTDIR}/${TEXTURE_FILENAME}" OR 
-        "${TEXTURE_FILE}" IS_NEWER_THAN "${ASSET_TIMESTAMP_FILE}")
-
-        message(STATUS "Copying ${TEXTURE_FILE}")
-        file(COPY "${TEXTURE_FILE}" DESTINATION "${TEXTURES_DESTDIR}")
+    if (NOT EXISTS "${DST_FILE}" OR "${SRC_FILE}" IS_NEWER_THAN "${ASSET_TIMESTAMP_FILE}")
+        message(STATUS "Copying ${SRC_FILE}")
+        file(COPY "${SRC_FILE}" DESTINATION "${FILE_DST_DIR}")
     endif()
 endforeach()
 
