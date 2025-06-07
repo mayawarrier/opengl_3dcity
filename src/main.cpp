@@ -1,5 +1,6 @@
 
 #include <array>
+#include <charconv>
 
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_main.h>
@@ -21,60 +22,57 @@
 #include <osmium/geom/coordinates.hpp>
 #include <osmium/geom/mercator_projection.hpp>
 
+#include <mapbox/earcut.hpp>
+
 #include "utils.hpp"
 #include "glutils.hpp"
 #include "viewport.hpp"
 
-class AmenityHandler : public osmium::handler::Handler 
+namespace mapbox {
+namespace util {
+
+template <>
+struct nth<0, osmium::geom::Coordinates> {
+    inline static auto get(const osmium::geom::Coordinates& t) {
+        return t.x;
+    };
+};
+template <>
+struct nth<1, osmium::geom::Coordinates> {
+    inline static auto get(const osmium::geom::Coordinates& t) {
+        return t.y;
+    };
+};
+}}
+
+static osmium::geom::Coordinates calc_center(const osmium::NodeRefList& nr_list)
 {
-    
-
-
-    // Print info about one amenity to stdout.
-    static void print_amenity(const char* type, const char* name, const osmium::geom::Coordinates& c) {
-        std::printf("%8.4f,%8.4f %-15s %s\n", c.x, c.y, type, name ? name : "");
+    osmium::geom::Coordinates c{ 0.0, 0.0 };
+    for (const auto& nr : nr_list) {
+        c.x += nr.lon();
+        c.y += nr.lat();
     }
 
-    // Calculate the center point of a NodeRefList.
-    static osmium::geom::Coordinates calc_center(const osmium::NodeRefList& nr_list) {
-        // Coordinates simply store an X and Y coordinate pair as doubles.
-        // (Unlike osmium::Location which stores them more efficiently as
-        // 32 bit integers.) Use Coordinates when you want to do calculations
-        // or store projected coordinates.
-        osmium::geom::Coordinates c{ 0.0, 0.0 };
+    c.x /= static_cast<double>(nr_list.size());
+    c.y /= static_cast<double>(nr_list.size());
+    return c;
+}
 
-        for (const auto& nr : nr_list) {
-            c.x += nr.lon();
-            c.y += nr.lat();
-        }
-
-        c.x /= static_cast<double>(nr_list.size());
-        c.y /= static_cast<double>(nr_list.size());
-
-        return c;
-    }
-
+class osm_datahandler : public osmium::handler::Handler 
+{
 public:
-
     std::vector<double> node_coords;
 
-    std::vector<double> way_nodecoords;
-    std::vector<GLint> way_startidx;
-    std::vector<GLsizei> way_counts;
+    std::vector<double> line_verts;
+    std::vector<GLint> line_startidx;
+    std::vector<GLsizei> line_counts;
 
-    // The callback functions can be either static or not depending on whether
-    // you need to access any member variables of the handler.
-    void node(const osmium::Node& node) {
-        // Getting a tag value can be expensive, because a list of tags has
-        // to be gone through and each tag has to be checked. So we store the
-        // result and reuse it.
-        const char* amenity = node.tags()["amenity"];
-        if (amenity) {
-            print_amenity(amenity, node.tags()["name"], node.location());
-        }
+    std::vector<double> tri_verts;
+    std::vector<std::array<uint32_t, 3>> tris;
 
+    void node(const osmium::Node& node) 
+    {
         auto loc = osmium::geom::MercatorProjection{}(node.location());
-
         node_coords.push_back(loc.x);
         node_coords.push_back(loc.y);
         node_coords.push_back(0.0);
@@ -82,60 +80,142 @@ public:
 
     void way(const osmium::Way& way)
     {
+        auto& tags = way.tags();
         auto& nodes = way.nodes();
 
-        way_startidx.push_back(GLint(way_nodecoords.size() / 3));
-        way_counts.push_back(GLsizei(nodes.size()));
+        bool is_highway = tags.has_key("highway");
+        bool is_building = tags.has_key("building");
+        bool is_building_part = tags.has_key("building:part");
 
-        for (const auto& nr : nodes) {
-            auto loc = osmium::geom::MercatorProjection{}(nr.location());
-            way_nodecoords.push_back(loc.x);
-            way_nodecoords.push_back(loc.y);
-            way_nodecoords.push_back(0.0);
+        if (is_highway || is_building)
+        {
+            add_polyline(nodes);
+        }
+        else if (is_building_part)
+        {
+            auto height_str = tags["height"];
+            auto levels_str = tags["building:levels"];
+
+            if (height_str) 
+            {
+                double height;
+                std::from_chars(height_str, height_str + std::strlen(height_str), height);
+                add_building_mesh(nodes, height);
+            }
+            else if (levels_str) 
+            {
+                int levels;
+                std::from_chars(levels_str, levels_str + std::strlen(levels_str), levels);
+                add_building_mesh(nodes, levels * 3.0);
+            }
+            else { add_polyline(nodes); }
         }
     }
 
     // The callback functions can be either static or not depending on whether
     // you need to access any member variables of the handler.
     void area(const osmium::Area& area) {
-        const char* amenity = area.tags()["amenity"];
-        if (amenity) {
-            // Use the center of the first outer ring. Because we set
-            // create_empty_areas = false in the assembler config, we can
-            // be sure there will always be at least one outer ring.
-            const auto center = calc_center(*area.cbegin<osmium::OuterRing>());
+        //const char* amenity = area.tags()["amenity"];
+        //if (amenity) {
+        //    // Use the center of the first outer ring. Because we set
+        //    // create_empty_areas = false in the assembler config, we can
+        //    // be sure there will always be at least one outer ring.
+        //    const auto center = calc_center(*area.cbegin<osmium::OuterRing>());
+        //
+        //    print_amenity(amenity, area.tags()["name"], center);
+        //}
+    }
 
-            print_amenity(amenity, area.tags()["name"], center);
+private:
+    uint32_t add_polygon(const std::vector<osmium::geom::Coordinates>& verts,
+        std::vector<uint32_t> indices, double height)
+    {
+        uint32_t vert_startidx = uint32_t(tri_verts.size() / 3);
+
+        for (const auto& vert : verts) {
+            tri_verts.push_back(vert.x);
+            tri_verts.push_back(vert.y);
+            tri_verts.push_back(height);
+        }
+        for (size_t i = 0; i < indices.size(); i += 3)
+        {
+            tris.push_back({
+                indices[i] + vert_startidx,
+                indices[i + 1] + vert_startidx,
+                indices[i + 2] + vert_startidx
+            });
+        }
+        return vert_startidx;
+    }
+
+    void add_polyline(const osmium::NodeRefList& nodes)
+    {
+        line_startidx.push_back(GLint(line_verts.size() / 3));
+        line_counts.push_back(GLsizei(nodes.size()));
+
+        for (const auto& nr : nodes) {
+            auto loc = osmium::geom::MercatorProjection{}(nr.location());
+            line_verts.push_back(loc.x);
+            line_verts.push_back(loc.y);
+            line_verts.push_back(0.0);
         }
     }
 
-}; // class AmenityHandler
+    void add_building_mesh(const osmium::NodeRefList& nodes, double height)
+    {
+        std::vector<std::vector<osmium::geom::Coordinates>> earcut_polylines;
+        earcut_polylines.resize(1); // earcut needs a vector of polylines
+
+        auto& node_verts = earcut_polylines[0];
+        for (const auto& nr : nodes) {
+            auto loc = osmium::geom::MercatorProjection{}(nr.location());
+            node_verts.push_back(loc);
+        }
+
+        auto topbot_indices = mapbox::earcut<uint32_t>(earcut_polylines);
+
+        uint32_t bot_verts_idx = add_polygon(node_verts, topbot_indices, 0.0);    // bottom face
+        uint32_t top_verts_idx = add_polygon(node_verts, topbot_indices, height); // top face
+
+        // side faces
+        for (size_t cur = 0; cur < nodes.size(); ++cur)
+        {
+            uint32_t next = (cur + 1) % nodes.size();
+
+            uint32_t quad[4] = {
+                bot_verts_idx + cur,
+                bot_verts_idx + next,
+                top_verts_idx + cur,
+                top_verts_idx + next,
+            };
+            tris.push_back({ quad[0], quad[3], quad[2] });
+            tris.push_back({ quad[0], quad[1], quad[3] });
+        }
+    }
+};
 
 
-bool osm(AmenityHandler& data_handler)
+static bool read_osmfile(const fs::path& path, osm_datahandler& osmdata)
 {
     using index_t = osmium::index::map::FlexMem<osmium::unsigned_object_id_type, osmium::Location>;
     using location_handler_t = osmium::handler::NodeLocationsForWays<index_t>;
 
     try {
-        // The input file
-        const osmium::io::File input_file{ "assets/maps/testmap.osm" };
+        const osmium::io::File input_file{ path.string() };
 
         osmium::area::Assembler::config_type assembler_config;
         assembler_config.create_empty_areas = false;
 
         osmium::area::MultipolygonManager<osmium::area::Assembler> mp_manager{ assembler_config };
-
         osmium::relations::read_relations(input_file, mp_manager);
 
         index_t index;
         location_handler_t location_handler(index);
         
-
         osmium::io::Reader reader{ input_file, osmium::io::read_meta::no };
-        osmium::apply(reader, location_handler, data_handler, 
-            mp_manager.handler([&data_handler](const osmium::memory::Buffer& area_buffer) {
-                osmium::apply(area_buffer, data_handler);
+        osmium::apply(reader, location_handler, osmdata, 
+            mp_manager.handler([&osmdata](const osmium::memory::Buffer& area_buffer) {
+                osmium::apply(area_buffer, osmdata);
             }
         ));
 
@@ -149,7 +229,7 @@ bool osm(AmenityHandler& data_handler)
     return true;
 }
 
-void center_coords(const std::vector<double>& coords, std::vector<float>& coords_float)
+static glm::dvec3 coord_avg(const std::vector<double>& coords)
 {
     glm::dvec3 avg_coord(0.0, 0.0, 0.0);
     for (size_t i = 0; i < coords.size(); i += 3) {
@@ -158,14 +238,18 @@ void center_coords(const std::vector<double>& coords, std::vector<float>& coords
         avg_coord.z += coords[i + 2];
     }
     avg_coord /= (coords.size() / 3);
+    return avg_coord;
+}
 
+static void center_coords(const std::vector<double>& coords, glm::dvec3 center, std::vector<float>& coords_float)
+{
     coords_float.resize(coords.size());
 
     //center the nodes around the average coordinate
     for (size_t i = 0; i < coords.size(); i += 3) {
-        coords_float[i] = coords[i] - avg_coord.x;
-        coords_float[i + 1] = coords[i + 1] - avg_coord.y;
-        coords_float[i + 2] = coords[i + 2] - avg_coord.z;
+        coords_float[i] = coords[i] - center.x;
+        coords_float[i + 1] = coords[i + 1] - center.y;
+        coords_float[i + 2] = coords[i + 2] - center.z;
     }
 }
 
@@ -190,35 +274,47 @@ int main(int argc, char* argv[])
         return -1;
     }
 
-    AmenityHandler data_handler;
-    osm(data_handler);
-    
-    // calculate average coordinate in data_handler.node_coords
-    if (data_handler.node_coords.empty()) {
-        logERROR("No nodes found in OSM data");
+    osm_datahandler osmdata;
+    if (!read_osmfile("assets/maps/testmap.osm", osmdata)) {
+        logERROR("Failed to read OSM map file");
         return -1;
     }
-    
+
     std::vector<float> node_coords;
-    std::vector<float> way_nodecoords;
+    std::vector<float> line_verts;
+    std::vector<float> tri_verts;
 
-    center_coords(data_handler.node_coords, node_coords);
-    center_coords(data_handler.way_nodecoords, way_nodecoords);
+    glm::dvec3 coord_center = coord_avg(osmdata.node_coords);
 
+    center_coords(osmdata.node_coords, coord_center, node_coords);
+    center_coords(osmdata.line_verts, coord_center, line_verts);
+    center_coords(osmdata.tri_verts, coord_center, tri_verts);
+
+    std::vector<GLsizei> tri_vertcounts;
+    tri_vertcounts.resize(tri_verts.size());
+    for (size_t i = 0; i < tri_verts.size(); ++i) {
+        tri_vertcounts[i] = 3;
+    }
+
+    std::vector<void*> tri_indices;
+    tri_indices.resize(osmdata.tris.size());
+    for (size_t i = 0; i < osmdata.tris.size(); ++i) {
+        tri_indices[i] = &osmdata.tris[i];
+    }
 
     // add some sample points for testing
-    //AmenityHandler data_handler;
-    //data_handler.node_coords.push_back(0.0f);
-    //data_handler.node_coords.push_back(0.0f);
-    //data_handler.node_coords.push_back(0.0f);
-    //data_handler.node_coords.push_back(100.0f);
-    //data_handler.node_coords.push_back(100.0f);
-    //data_handler.node_coords.push_back(0.0f);
-    //data_handler.node_coords.push_back(-100.0f);
-    //data_handler.node_coords.push_back(-100.0f);
-    //data_handler.node_coords.push_back(0.f);
+    //osm_datahandler osmdata;
+    //osmdata.node_coords.push_back(0.0f);
+    //osmdata.node_coords.push_back(0.0f);
+    //osmdata.node_coords.push_back(0.0f);
+    //osmdata.node_coords.push_back(100.0f);
+    //osmdata.node_coords.push_back(100.0f);
+    //osmdata.node_coords.push_back(0.0f);
+    //osmdata.node_coords.push_back(-100.0f);
+    //osmdata.node_coords.push_back(-100.0f);
+    //osmdata.node_coords.push_back(0.f);
 
-    shaderstage::info shader_stages[2] = {
+    shaderfile::info shader_stages[2] = {
         { "assets/shaders/vertex.vert", GL_VERTEX_SHADER },
         { "assets/shaders/fragment.frag", GL_FRAGMENT_SHADER }
     };
@@ -287,11 +383,17 @@ int main(int argc, char* argv[])
     unsigned EBO;
     unsigned VAO_way;
     unsigned VBO_way;
+
+    unsigned VBO_tris;
+    unsigned VAO_tris;
     
     glGenVertexArrays(1, &VAO);
     glGenVertexArrays(1, &VAO_way);
     glGenBuffers(1, &VBO);
     glGenBuffers(1, &VBO_way);
+
+    glGenVertexArrays(1, &VAO_tris);
+    glGenBuffers(1, &VBO_tris);
 
     //glGenBuffers(1, &EBO);
     
@@ -318,13 +420,22 @@ int main(int argc, char* argv[])
     glBindVertexArray(VAO_way);
     {
         glBindBuffer(GL_ARRAY_BUFFER, VBO_way);
-        glBufferData(GL_ARRAY_BUFFER, way_nodecoords.size() * sizeof(float), way_nodecoords.data(), GL_STATIC_DRAW);
+        glBufferData(GL_ARRAY_BUFFER, line_verts.size() * sizeof(float), line_verts.data(), GL_STATIC_DRAW);
+
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
         glEnableVertexAttribArray(0);
     }
     glBindVertexArray(0);
 
+    glBindVertexArray(VAO_tris);
+    {
+        glBindBuffer(GL_ARRAY_BUFFER, VBO_tris);
+        glBufferData(GL_ARRAY_BUFFER, tri_verts.size() * sizeof(float), tri_verts.data(), GL_STATIC_DRAW);
 
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(0);
+    }
+    glBindVertexArray(0);
 
 
     //int texture0_loc = shader.get_uniform_loc("texture0");
@@ -346,7 +457,9 @@ int main(int argc, char* argv[])
 
     edit_camera camera;
 
-    glm::mat4 projection = glm::ortho(-1000.f, 1000.f, -1000.f, 1000.f, 0.1f, 100.f);//glm::perspective(glm::radians(45.0f), wnd.aspect_ratio(), 0.001f, 100.0f);
+    glm::mat4 projection = glm::perspective(glm::radians(45.0f), wnd.aspect_ratio(), 0.0001f, 10000.0f);
+
+    //glm::mat4 projection = glm::ortho(-1000.f, 1000.f, -1000.f, 1000.f, 0.001f, 1000.f);//glm::perspective(glm::radians(45.0f), wnd.aspect_ratio(), 0.001f, 100.0f);
 
     uint64_t last_ticks = 0;
 
@@ -397,51 +510,37 @@ int main(int argc, char* argv[])
         //shader.bind_texture(texture0_loc, 0, containertex);
         //shader.bind_texture(texture1_loc, 1, logotex);
 
+        glm::mat4 model(1.0f);
+        model = glm::rotate(model, glm::radians(-90.f), glm::vec3(1.f, 0.f, 0.f));
+        glm::mat4 mvp = projection * camera.view() * model;
+        glUniformMatrix4fv(mvp_loc, 1, GL_FALSE, glm::value_ptr(mvp));
+
         glBindVertexArray(VAO);
         {
-            //for (int i = 0; i < num_cubes; ++i)
-            //{
-            //    glm::mat4 model(1.0f);
-            //    model = glm::translate(model, cubes[i].first);
-            //    model = glm::rotate(model, float(time), cubes[i].second);
-            //    model = glm::scale(model, glm::vec3(0.5f, 0.5f, 0.5f));
-            //
-            //    glm::mat4 mvp = projection * camera.view() * model;
-            //    glUniformMatrix4fv(mvp_loc, 1, GL_FALSE, glm::value_ptr(mvp));
-            //
-            //    glDrawArrays(GL_TRIANGLES, 0, 36);
-            //}
-            //
-            //glm::mat4 model(1.0f);
-            //model = glm::scale(model, glm::vec3(2.0f, 2.0f, 2.0f));
-            //
-            //glm::mat4 mvp = projection * camera.view() * model;
-            //glUniformMatrix4fv(mvp_loc, 1, GL_FALSE, glm::value_ptr(mvp));
-            //glDrawArrays(GL_TRIANGLES, 0, 36);
-
-            glm::mat4 model(1.0f);
-            glm::mat4 mvp = projection * camera.view() * model;
-            glUniform4f(color_loc, 0.0f, 0.0f, 0.0f, 1.0f);
-            glUniformMatrix4fv(mvp_loc, 1, GL_FALSE, glm::value_ptr(mvp));
+            glUniform4f(color_loc, 0.0f, 0.0f, 0.0f, 1.0f); // black
             glDrawArrays(GL_POINTS, 0, node_coords.size() / 3);
         }
         glBindVertexArray(0);
 
-        // Draw the ways
+        // Draw the lines
         glBindVertexArray(VAO_way);
         {
-            glm::mat4 model(1.0f);
-            glm::mat4 mvp = projection * camera.view() * model;
-            glUniform4f(color_loc, 1.0f, 0.0f, 0.0f, 1.0f);
-            glUniformMatrix4fv(mvp_loc, 1, GL_FALSE, glm::value_ptr(mvp));
+            glUniform4f(color_loc, 1.0f, 0.0f, 0.0f, 1.0f); // red
 
             glMultiDrawArrays(GL_LINE_STRIP, 
-                data_handler.way_startidx.data(), 
-                data_handler.way_counts.data(),
-                GLsizei(data_handler.way_counts.size()));
+                osmdata.line_startidx.data(), 
+                osmdata.line_counts.data(),
+                GLsizei(osmdata.line_counts.size()));
         }
         glBindVertexArray(0);
 
+        // Draw buildings
+        glBindVertexArray(VAO_tris);
+        {
+            glUniform4f(color_loc, 0.5f, 0.5f, 0.5f, 1.0f); // gray
+            glMultiDrawElements(GL_TRIANGLES, tri_vertcounts.data(), GL_UNSIGNED_INT, tri_indices.data(), tri_indices.size());
+        }
+        glBindVertexArray(0);
 
         wnd.update();
     }

@@ -49,6 +49,9 @@ if (WIN32)
     target_compile_definitions(3dcity PUBLIC NOMINMAX)
 endif()
 
+find_path(EARCUT_HPP_INCLUDE_DIRS "mapbox/earcut.hpp")
+target_include_directories(3dcity PRIVATE ${EARCUT_HPP_INCLUDE_DIRS})
+
 # -------------------------------- OSMIUM ------------------------------------
 
 find_path(OSMIUM_INCLUDE_DIRS "osmium/version.hpp")

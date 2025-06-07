@@ -97,7 +97,7 @@ static bool gl_make_program(const unsigned* shaders, int num_shaders, unsigned& 
     return true;
 }
 
-static bool gl_load_program(const shaderstage::info* shader_info, int num_shaders, unsigned& out_program)
+static bool gl_load_program(const shaderfile::info* shader_info, int num_shaders, unsigned& out_program)
 {
     unsigned program = glCreateProgram();
 
@@ -180,22 +180,22 @@ static bool gl_load_texture2d(const fs::path& path, unsigned& out_texture)
     return true;
 }
 
-shaderstage::shaderstage(const fs::path& path, GLenum type) : m_handle(0)
+shaderfile::shaderfile(const fs::path& path, GLenum type) : m_handle(0)
 {
     gl_load_shader(path, type, m_handle);
 }
 
-shaderstage::~shaderstage() noexcept { glDeleteShader(m_handle); }
+shaderfile::~shaderfile() noexcept { glDeleteShader(m_handle); }
 
-shader::shader(const shaderstage::info* stages, int num_stages) : m_handle(0)
+shader::shader(const shaderfile::info* files, int num_files) : m_handle(0)
 {
-    gl_load_program(stages, num_stages, m_handle);
+    gl_load_program(files, num_files, m_handle);
 }
 
-shader::shader(const shaderstage* stages, int num_stages) : m_handle(0)
+shader::shader(const shaderfile* files, int num_files) : m_handle(0)
 {
     // todo: cast here is bad, obviously
-    gl_make_program((const unsigned*)stages, num_stages, m_handle);
+    gl_make_program((const unsigned*)files, num_files, m_handle);
 }
 
 shader::~shader() noexcept { glDeleteProgram(m_handle); }

@@ -32,7 +32,7 @@ private:
     unsigned m_handle;
 };
 
-class shaderstage
+class shaderfile
 {
 public:
     struct info
@@ -42,14 +42,14 @@ public:
     };
 
 public:
-    shaderstage(const fs::path& path, GLenum type);
-    shaderstage(const info& info) : 
-        shaderstage(info.path, info.type) 
+    shaderfile(const fs::path& path, GLenum type);
+    shaderfile(const info& info) : 
+        shaderfile(info.path, info.type) 
     {}
 
-    GL_CLASS(shaderstage, m_handle)
+    GL_CLASS(shaderfile, m_handle)
 
-    ~shaderstage() noexcept;
+    ~shaderfile() noexcept;
 
 private:
     unsigned m_handle;
@@ -58,8 +58,8 @@ private:
 class shader
 {
 public:
-    shader(const shaderstage::info* stages, int num_stages);
-    shader(const shaderstage* stages, int num_stages);
+    shader(const shaderfile::info* files, int num_files);
+    shader(const shaderfile* files, int num_files);
 
     GL_CLASS(shader, m_handle);
 
