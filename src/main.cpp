@@ -12,7 +12,6 @@
 #include <glm/gtc/random.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
-
 #include <osmium/index/map/flex_mem.hpp>
 #include <osmium/handler/node_locations_for_ways.hpp>
 #include <osmium/area/assembler.hpp>
@@ -27,6 +26,7 @@
 #include "utils.hpp"
 #include "glutils.hpp"
 #include "viewport.hpp"
+
 
 namespace mapbox {
 namespace util {
@@ -44,6 +44,15 @@ struct nth<1, osmium::geom::Coordinates> {
     };
 };
 }}
+
+// strcmp with null check
+static bool str_equal(const char* str1, const char* str2) 
+{
+    if (str1 && !str2) { return false; }
+    if (str2 && !str1) { return false; }
+    if (!str2 && !str1) { return true; }
+    return std::strcmp(str1, str2) == 0;
+}
 
 static osmium::geom::Coordinates calc_center(const osmium::NodeRefList& nr_list)
 {
@@ -68,7 +77,7 @@ public:
     std::vector<GLsizei> line_counts;
 
     std::vector<double> tri_verts;
-    std::vector<std::array<uint32_t, 3>> tris;
+    std::vector<std::array<uint32_t, 3>> tri_indices;
 
     void node(const osmium::Node& node) 
     {
@@ -83,38 +92,36 @@ public:
         auto& tags = way.tags();
         auto& nodes = way.nodes();
 
-        bool is_highway = tags.has_key("highway");
-        bool is_building = tags.has_key("building");
-        bool is_building_part = tags.has_key("building:part");
-
-        if (is_highway || is_building)
+        if (tags.has_key("highway"))
         {
-            add_polyline(nodes);
+            add_polyline_from_nodes(nodes);
         }
-        else if (is_building_part)
+        else if (tags.has_key("building") || str_equal(tags["building:part"], "yes"))
         {
-            auto height_str = tags["height"];
-            auto levels_str = tags["building:levels"];
-
-            if (height_str) 
+            const char* height_str, *levels_str;
+            if ((height_str = tags["height"]))
             {
                 double height;
                 std::from_chars(height_str, height_str + std::strlen(height_str), height);
-                add_building_mesh(nodes, height);
+                add_building(nodes, height);
             }
-            else if (levels_str) 
+            else if ((levels_str = tags["building:levels"]))
             {
                 int levels;
                 std::from_chars(levels_str, levels_str + std::strlen(levels_str), levels);
-                add_building_mesh(nodes, levels * 3.0);
+                add_building(nodes, levels * 3.0);
             }
-            else { add_polyline(nodes); }
+            else { add_building(nodes, 3.0); }
         }
     }
 
     // The callback functions can be either static or not depending on whether
     // you need to access any member variables of the handler.
-    void area(const osmium::Area& area) {
+    void area(const osmium::Area& area) 
+    {
+        const char* name = area.tags()["name"];
+        logMESSAGE("Received area %s", name);
+
         //const char* amenity = area.tags()["amenity"];
         //if (amenity) {
         //    // Use the center of the first outer ring. Because we set
@@ -127,8 +134,33 @@ public:
     }
 
 private:
+    void add_polyline_from_nodes(const osmium::NodeRefList& nodes, double height = 0.0)
+    {
+        line_startidx.push_back(GLint(line_verts.size() / 3));
+        line_counts.push_back(GLsizei(nodes.size()));
+
+        for (const auto& nr : nodes) {
+            auto loc = osmium::geom::MercatorProjection{}(nr.location());
+            line_verts.push_back(loc.x);
+            line_verts.push_back(loc.y);
+            line_verts.push_back(height);
+        }
+    }
+
+    void add_polyline(const std::vector<osmium::geom::Coordinates>& verts, double height)
+    {
+        line_startidx.push_back(GLint(line_verts.size() / 3));
+        line_counts.push_back(GLsizei(verts.size()));
+
+        for (const auto& vert : verts) {
+            line_verts.push_back(vert.x);
+            line_verts.push_back(vert.y);
+            line_verts.push_back(height);
+        }
+    }
+
     uint32_t add_polygon(const std::vector<osmium::geom::Coordinates>& verts,
-        std::vector<uint32_t> indices, double height)
+        const std::vector<uint32_t>& indices, double height)
     {
         uint32_t vert_startidx = uint32_t(tri_verts.size() / 3);
 
@@ -139,7 +171,7 @@ private:
         }
         for (size_t i = 0; i < indices.size(); i += 3)
         {
-            tris.push_back({
+            tri_indices.push_back({
                 indices[i] + vert_startidx,
                 indices[i + 1] + vert_startidx,
                 indices[i + 2] + vert_startidx
@@ -148,20 +180,7 @@ private:
         return vert_startidx;
     }
 
-    void add_polyline(const osmium::NodeRefList& nodes)
-    {
-        line_startidx.push_back(GLint(line_verts.size() / 3));
-        line_counts.push_back(GLsizei(nodes.size()));
-
-        for (const auto& nr : nodes) {
-            auto loc = osmium::geom::MercatorProjection{}(nr.location());
-            line_verts.push_back(loc.x);
-            line_verts.push_back(loc.y);
-            line_verts.push_back(0.0);
-        }
-    }
-
-    void add_building_mesh(const osmium::NodeRefList& nodes, double height)
+    void add_building(const osmium::NodeRefList& nodes, double height)
     {
         std::vector<std::vector<osmium::geom::Coordinates>> earcut_polylines;
         earcut_polylines.resize(1); // earcut needs a vector of polylines
@@ -178,7 +197,7 @@ private:
         uint32_t top_verts_idx = add_polygon(node_verts, topbot_indices, height); // top face
 
         // side faces
-        for (size_t cur = 0; cur < nodes.size(); ++cur)
+        for (uint32_t cur = 0; cur < nodes.size(); ++cur)
         {
             uint32_t next = (cur + 1) % nodes.size();
 
@@ -188,14 +207,17 @@ private:
                 top_verts_idx + cur,
                 top_verts_idx + next,
             };
-            tris.push_back({ quad[0], quad[3], quad[2] });
-            tris.push_back({ quad[0], quad[1], quad[3] });
+            tri_indices.push_back({ quad[0], quad[3], quad[2] });
+            tri_indices.push_back({ quad[0], quad[1], quad[3] });
         }
+
+        add_polyline(node_verts, 0.0);
+        add_polyline(node_verts, height);
     }
 };
 
 
-static bool read_osmfile(const fs::path& path, osm_datahandler& osmdata)
+static bool read_osmfile(const fs::path& path, osm_datahandler& data_handler)
 {
     using index_t = osmium::index::map::FlexMem<osmium::unsigned_object_id_type, osmium::Location>;
     using location_handler_t = osmium::handler::NodeLocationsForWays<index_t>;
@@ -213,9 +235,9 @@ static bool read_osmfile(const fs::path& path, osm_datahandler& osmdata)
         location_handler_t location_handler(index);
         
         osmium::io::Reader reader{ input_file, osmium::io::read_meta::no };
-        osmium::apply(reader, location_handler, osmdata, 
-            mp_manager.handler([&osmdata](const osmium::memory::Buffer& area_buffer) {
-                osmium::apply(area_buffer, osmdata);
+        osmium::apply(reader, location_handler, data_handler,
+            mp_manager.handler([&data_handler](const osmium::memory::Buffer& area_buffer) {
+                osmium::apply(area_buffer, data_handler);
             }
         ));
 
@@ -245,7 +267,6 @@ static void center_coords(const std::vector<double>& coords, glm::dvec3 center, 
 {
     coords_float.resize(coords.size());
 
-    //center the nodes around the average coordinate
     for (size_t i = 0; i < coords.size(); i += 3) {
         coords_float[i] = coords[i] - center.x;
         coords_float[i + 1] = coords[i + 1] - center.y;
@@ -269,10 +290,12 @@ int main(int argc, char* argv[])
         return -1;
     }
 
-    window wnd("MAIN_WINDOW", "3D City", 750, 750);
+    window wnd("MAIN_WINDOW", "3D City", 900, 750);
     if (!wnd.ok()) {
         return -1;
     }
+
+    //wnd.set_fullscreen(true);
 
     osm_datahandler osmdata;
     if (!read_osmfile("assets/maps/testmap.osm", osmdata)) {
@@ -297,9 +320,9 @@ int main(int argc, char* argv[])
     }
 
     std::vector<void*> tri_indices;
-    tri_indices.resize(osmdata.tris.size());
-    for (size_t i = 0; i < osmdata.tris.size(); ++i) {
-        tri_indices[i] = &osmdata.tris[i];
+    tri_indices.resize(osmdata.tri_indices.size());
+    for (size_t i = 0; i < osmdata.tri_indices.size(); ++i) {
+        tri_indices[i] = &osmdata.tri_indices[i];
     }
 
     // add some sample points for testing
@@ -457,7 +480,7 @@ int main(int argc, char* argv[])
 
     edit_camera camera;
 
-    glm::mat4 projection = glm::perspective(glm::radians(45.0f), wnd.aspect_ratio(), 0.0001f, 10000.0f);
+    glm::mat4 projection = glm::perspective(glm::radians(45.0f), wnd.aspect_ratio(), 0.1f, 10000.0f);
 
     //glm::mat4 projection = glm::ortho(-1000.f, 1000.f, -1000.f, 1000.f, 0.001f, 1000.f);//glm::perspective(glm::radians(45.0f), wnd.aspect_ratio(), 0.001f, 100.0f);
 

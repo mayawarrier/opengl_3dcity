@@ -5,7 +5,7 @@
 #include "viewport.hpp"
 
 window::window(const char* name, const char* title, int width, int height) :
-    m_name(name), m_window(nullptr), m_glcontext(nullptr)
+    m_name(name), m_window(nullptr), m_glcontext(nullptr), m_width(width), m_height(height)
 {
     logMESSAGE("Initializing %s", name);
 
@@ -49,6 +49,50 @@ window::window(const char* name, const char* title, int width, int height) :
         logERROR("OpenGL version must be at least %d.%d", want_glversion.major, want_glversion.minor);
         cleanup();
         return;
+    }
+}
+
+bool window::set_fullscreen(bool enable)
+{
+    if (enable) 
+    {
+        logMESSAGE("Switching %s to fullscreen mode", m_name);
+
+        int disp_idx = SDL_GetWindowDisplayIndex(m_window);
+        if (disp_idx < 0) {
+            logERROR("SDL_GetWindowDisplayIndex(): %s", SDL_GetError());
+            return false;
+        }
+        SDL_Rect disp_bounds;
+        if (SDL_GetDisplayBounds(disp_idx, &disp_bounds) != 0) {
+            logERROR("SDL_GetDisplayBounds(): %s", SDL_GetError());
+            return false;
+        }
+
+        SDL_DisplayMode desired = { 0 };
+        desired.w = disp_bounds.w;
+        desired.h = disp_bounds.h;
+
+        SDL_DisplayMode closest;
+        if (SDL_GetClosestDisplayMode(disp_idx, &desired, &closest) == nullptr) {
+            logERROR("SDL_GetClosestDisplayMode(): %s", SDL_GetError());
+            return false;
+        }
+
+        SDL_SetWindowSize(m_window, closest.w, closest.h);
+        SDL_SetWindowFullscreen(m_window, SDL_WINDOW_FULLSCREEN);
+        glViewport(0, 0, closest.w, closest.h);
+
+        return true;
+    }
+    else {
+        logMESSAGE("Switching %s to windowed mode", m_name);
+
+        SDL_SetWindowSize(m_window, m_width, m_height);
+        SDL_SetWindowFullscreen(m_window, 0);
+        glViewport(0, 0, m_width, m_height);
+
+        return true;
     }
 }
 

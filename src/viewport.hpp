@@ -27,6 +27,9 @@ public:
         return float(s.width) / s.height;
     }
 
+    // Returns true on success.
+    bool set_fullscreen(bool enable);
+
     // Swap buffers and update screen.
     void update() { SDL_GL_SwapWindow(this->m_window); }
 
@@ -37,6 +40,7 @@ private:
     const char* m_name;
     SDL_Window* m_window;
     SDL_GLContext m_glcontext;
+    int m_width, m_height;
 };
 
 
