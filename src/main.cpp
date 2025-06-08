@@ -67,24 +67,39 @@ static osmium::geom::Coordinates calc_center(const osmium::NodeRefList& nr_list)
     return c;
 }
 
+// Every 3 values is a vertex.
+template <typename T>
+static glm::vec<3, T, glm::defaultp> avg_vert(const std::vector<T>& verts)
+{
+    glm::vec<3, T, glm::defaultp> avg(T(0));
+    for (size_t i = 0; i < verts.size(); i += 3) {
+        avg.x += verts[i];
+        avg.y += verts[i + 1];
+        avg.z += verts[i + 2];
+    }
+    avg /= (verts.size() / 3);
+    return avg;
+}
+
+struct osm_data
+{
+    std::vector<float> verts;
+    
+    // GL_TRIANGLES
+    std::vector<uint32_t> tri_indices;
+    // GL_LINE_STRIP with prim restart index
+    std::vector<uint32_t> line_indices;
+};
+
 class osm_datahandler : public osmium::handler::Handler 
 {
 public:
-    std::vector<double> node_coords;
-
-    std::vector<double> line_verts;
-    std::vector<GLint> line_startidx;
-    std::vector<GLsizei> line_counts;
-
-    std::vector<double> tri_verts;
-    std::vector<std::array<uint32_t, 3>> tri_indices;
-
     void node(const osmium::Node& node) 
     {
-        auto loc = osmium::geom::MercatorProjection{}(node.location());
-        node_coords.push_back(loc.x);
-        node_coords.push_back(loc.y);
-        node_coords.push_back(0.0);
+        //auto loc = osmium::geom::MercatorProjection{}(node.location());
+        //node_coords.push_back(loc.x);
+        //node_coords.push_back(loc.y);
+        //node_coords.push_back(0.0);
     }
 
     void way(const osmium::Way& way)
@@ -120,7 +135,7 @@ public:
     void area(const osmium::Area& area) 
     {
         const char* name = area.tags()["name"];
-        logMESSAGE("Received area %s", name);
+        //logMESSAGE("Received area %s", name);
 
         //const char* amenity = area.tags()["amenity"];
         //if (amenity) {
@@ -133,49 +148,99 @@ public:
         //}
     }
 
-private:
-    void add_polyline_from_nodes(const osmium::NodeRefList& nodes, double height = 0.0)
+    osm_data to_osmdata()
     {
-        line_startidx.push_back(GLint(line_verts.size() / 3));
-        line_counts.push_back(GLsizei(nodes.size()));
+        auto center = avg_vert(m_verts);
 
-        for (const auto& nr : nodes) {
-            auto loc = osmium::geom::MercatorProjection{}(nr.location());
-            line_verts.push_back(loc.x);
-            line_verts.push_back(loc.y);
-            line_verts.push_back(height);
+        std::vector<float> verts_float;
+        verts_float.resize(m_verts.size());
+
+        for (size_t i = 0; i < m_verts.size(); i += 3) {
+            verts_float[i + 0] = m_verts[i + 0] - center.x;
+            verts_float[i + 1] = m_verts[i + 1] - center.y;
+            verts_float[i + 2] = m_verts[i + 2] - center.z;
         }
+        return {
+            .verts = std::move(verts_float),
+            .tri_indices = std::move(m_tri_indices),
+            .line_indices = std::move(m_line_indices)
+        };
     }
 
-    void add_polyline(const std::vector<osmium::geom::Coordinates>& verts, double height)
+private:
+    void add_line_indices(uint32_t idx0, uint32_t idx1)
     {
-        line_startidx.push_back(GLint(line_verts.size() / 3));
-        line_counts.push_back(GLsizei(verts.size()));
+        m_line_indices.push_back(idx0);
+        m_line_indices.push_back(idx1);
+        // prim restart index
+        m_line_indices.push_back(std::numeric_limits<uint32_t>::max());
+    }
+
+    void add_polyline_indices(uint32_t startidx, uint32_t size, bool is_closed)
+    {
+        if (size == 0) { return; } // handle underflow
+
+        for (uint32_t i = 0; i < size - 1; ++i) {
+            m_line_indices.push_back(startidx + i);
+        }
+        if (is_closed) {
+            m_line_indices.push_back(startidx);
+        } else {
+            m_line_indices.push_back(startidx + size - 1);
+        }
+        // prim restart index
+        m_line_indices.push_back(std::numeric_limits<uint32_t>::max());
+    }
+
+    void add_polyline_from_nodes(const osmium::NodeRefList& nodes)
+    {
+        uint32_t vert_startidx = uint32_t(m_verts.size() / 3);
+
+        for (const auto& node : nodes) {
+            auto loc = osmium::geom::MercatorProjection{}(node.location());
+            m_verts.push_back(loc.x);
+            m_verts.push_back(loc.y);
+            m_verts.push_back(0.0);
+        }
+        add_polyline_indices(vert_startidx, uint32_t(nodes.size()), nodes.is_closed());
+    }
+
+    void add_polyline(const std::vector<osmium::geom::Coordinates>& verts, double height, bool is_closed)
+    {
+        uint32_t vert_startidx = uint32_t(m_verts.size() / 3);
 
         for (const auto& vert : verts) {
-            line_verts.push_back(vert.x);
-            line_verts.push_back(vert.y);
-            line_verts.push_back(height);
+            m_verts.push_back(vert.x);
+            m_verts.push_back(vert.y);
+            m_verts.push_back(height);
         }
+        add_polyline_indices(vert_startidx, uint32_t(verts.size()), is_closed);
+    }
+
+    // Verts must be in clockwise winding order
+    void add_tri_indices(uint32_t idx0, uint32_t idx1, uint32_t idx2)
+    {
+        m_tri_indices.push_back(idx0);
+        m_tri_indices.push_back(idx1);
+        m_tri_indices.push_back(idx2);
     }
 
     uint32_t add_polygon(const std::vector<osmium::geom::Coordinates>& verts,
         const std::vector<uint32_t>& indices, double height)
     {
-        uint32_t vert_startidx = uint32_t(tri_verts.size() / 3);
+        uint32_t vert_startidx = uint32_t(m_verts.size() / 3);
 
         for (const auto& vert : verts) {
-            tri_verts.push_back(vert.x);
-            tri_verts.push_back(vert.y);
-            tri_verts.push_back(height);
+            m_verts.push_back(vert.x);
+            m_verts.push_back(vert.y);
+            m_verts.push_back(height);
         }
         for (size_t i = 0; i < indices.size(); i += 3)
         {
-            tri_indices.push_back({
-                indices[i] + vert_startidx,
-                indices[i + 1] + vert_startidx,
-                indices[i + 2] + vert_startidx
-            });
+            add_tri_indices(
+                indices[i] + vert_startidx, 
+                indices[i + 1] + vert_startidx, 
+                indices[i + 2] + vert_startidx);
         }
         return vert_startidx;
     }
@@ -186,8 +251,8 @@ private:
         earcut_polylines.resize(1); // earcut needs a vector of polylines
 
         auto& node_verts = earcut_polylines[0];
-        for (const auto& nr : nodes) {
-            auto loc = osmium::geom::MercatorProjection{}(nr.location());
+        for (const auto& node : nodes) {
+            auto loc = osmium::geom::MercatorProjection{}(node.location());
             node_verts.push_back(loc);
         }
 
@@ -196,7 +261,11 @@ private:
         uint32_t bot_verts_idx = add_polygon(node_verts, topbot_indices, 0.0);    // bottom face
         uint32_t top_verts_idx = add_polygon(node_verts, topbot_indices, height); // top face
 
-        // side faces
+        // bottom and top outlines
+        add_polyline(node_verts, 0.0, nodes.is_closed());
+        add_polyline(node_verts, height, nodes.is_closed());
+
+        // sides
         for (uint32_t cur = 0; cur < nodes.size(); ++cur)
         {
             uint32_t next = (cur + 1) % nodes.size();
@@ -207,17 +276,26 @@ private:
                 top_verts_idx + cur,
                 top_verts_idx + next,
             };
-            tri_indices.push_back({ quad[0], quad[3], quad[2] });
-            tri_indices.push_back({ quad[0], quad[1], quad[3] });
-        }
+            // faces
+            add_tri_indices(quad[0], quad[3], quad[2]);
+            add_tri_indices(quad[0], quad[1], quad[3]);
 
-        add_polyline(node_verts, 0.0);
-        add_polyline(node_verts, height);
+            // outlines
+            add_line_indices(quad[0], quad[2]);
+            add_line_indices(quad[1], quad[3]);
+        }
     }
+
+private:
+    //std::vector<double> node_coords;
+
+    std::vector<double> m_verts;
+    std::vector<uint32_t> m_line_indices;
+    std::vector<uint32_t> m_tri_indices;
 };
 
 
-static bool read_osmfile(const fs::path& path, osm_datahandler& data_handler)
+static bool read_osmfile(const fs::path& path, osm_data& out_data)
 {
     using index_t = osmium::index::map::FlexMem<osmium::unsigned_object_id_type, osmium::Location>;
     using location_handler_t = osmium::handler::NodeLocationsForWays<index_t>;
@@ -233,6 +311,7 @@ static bool read_osmfile(const fs::path& path, osm_datahandler& data_handler)
 
         index_t index;
         location_handler_t location_handler(index);
+        osm_datahandler data_handler;
         
         osmium::io::Reader reader{ input_file, osmium::io::read_meta::no };
         osmium::apply(reader, location_handler, data_handler,
@@ -240,8 +319,9 @@ static bool read_osmfile(const fs::path& path, osm_datahandler& data_handler)
                 osmium::apply(area_buffer, data_handler);
             }
         ));
-
         reader.close();
+
+        out_data = data_handler.to_osmdata();
     }
     catch (const std::exception& e) {
         std::fprintf(stderr, "%s\n", e.what());
@@ -251,28 +331,6 @@ static bool read_osmfile(const fs::path& path, osm_datahandler& data_handler)
     return true;
 }
 
-static glm::dvec3 coord_avg(const std::vector<double>& coords)
-{
-    glm::dvec3 avg_coord(0.0, 0.0, 0.0);
-    for (size_t i = 0; i < coords.size(); i += 3) {
-        avg_coord.x += coords[i];
-        avg_coord.y += coords[i + 1];
-        avg_coord.z += coords[i + 2];
-    }
-    avg_coord /= (coords.size() / 3);
-    return avg_coord;
-}
-
-static void center_coords(const std::vector<double>& coords, glm::dvec3 center, std::vector<float>& coords_float)
-{
-    coords_float.resize(coords.size());
-
-    for (size_t i = 0; i < coords.size(); i += 3) {
-        coords_float[i] = coords[i] - center.x;
-        coords_float[i + 1] = coords[i + 1] - center.y;
-        coords_float[i + 2] = coords[i + 2] - center.z;
-    }
-}
 
 int main(int argc, char* argv[]) 
 {
@@ -297,32 +355,10 @@ int main(int argc, char* argv[])
 
     //wnd.set_fullscreen(true);
 
-    osm_datahandler osmdata;
+    osm_data osmdata;
     if (!read_osmfile("assets/maps/testmap.osm", osmdata)) {
         logERROR("Failed to read OSM map file");
         return -1;
-    }
-
-    std::vector<float> node_coords;
-    std::vector<float> line_verts;
-    std::vector<float> tri_verts;
-
-    glm::dvec3 coord_center = coord_avg(osmdata.node_coords);
-
-    center_coords(osmdata.node_coords, coord_center, node_coords);
-    center_coords(osmdata.line_verts, coord_center, line_verts);
-    center_coords(osmdata.tri_verts, coord_center, tri_verts);
-
-    std::vector<GLsizei> tri_vertcounts;
-    tri_vertcounts.resize(tri_verts.size());
-    for (size_t i = 0; i < tri_verts.size(); ++i) {
-        tri_vertcounts[i] = 3;
-    }
-
-    std::vector<void*> tri_indices;
-    tri_indices.resize(osmdata.tri_indices.size());
-    for (size_t i = 0; i < osmdata.tri_indices.size(); ++i) {
-        tri_indices[i] = &osmdata.tri_indices[i];
     }
 
     // add some sample points for testing
@@ -357,103 +393,76 @@ int main(int argc, char* argv[])
     //}
 
     glEnable(GL_DEPTH_TEST);
+    glEnable(GL_PRIMITIVE_RESTART);
 
-    //float vertices[] = {
-    //    -0.5f, -0.5f, -0.5f,   0.0f, 0.0f,
-    //     0.5f, -0.5f, -0.5f,   1.0f, 0.0f,
-    //     0.5f,  0.5f, -0.5f,   1.0f, 1.0f,
-    //     0.5f,  0.5f, -0.5f,   1.0f, 1.0f,
-    //    -0.5f,  0.5f, -0.5f,   0.0f, 1.0f,
-    //    -0.5f, -0.5f, -0.5f,   0.0f, 0.0f,
-    //                           
-    //    -0.5f, -0.5f,  0.5f,   0.0f, 0.0f,
-    //     0.5f, -0.5f,  0.5f,   1.0f, 0.0f,
-    //     0.5f,  0.5f,  0.5f,   1.0f, 1.0f,
-    //     0.5f,  0.5f,  0.5f,   1.0f, 1.0f,
-    //    -0.5f,  0.5f,  0.5f,   0.0f, 1.0f,
-    //    -0.5f, -0.5f,  0.5f,   0.0f, 0.0f,
-    //                           
-    //    -0.5f,  0.5f,  0.5f,   1.0f, 0.0f,
-    //    -0.5f,  0.5f, -0.5f,   1.0f, 1.0f,
-    //    -0.5f, -0.5f, -0.5f,   0.0f, 1.0f,
-    //    -0.5f, -0.5f, -0.5f,   0.0f, 1.0f,
-    //    -0.5f, -0.5f,  0.5f,   0.0f, 0.0f,
-    //    -0.5f,  0.5f,  0.5f,   1.0f, 0.0f,
-    //                           
-    //     0.5f,  0.5f,  0.5f,   1.0f, 0.0f,
-    //     0.5f,  0.5f, -0.5f,   1.0f, 1.0f,
-    //     0.5f, -0.5f, -0.5f,   0.0f, 1.0f,
-    //     0.5f, -0.5f, -0.5f,   0.0f, 1.0f,
-    //     0.5f, -0.5f,  0.5f,   0.0f, 0.0f,
-    //     0.5f,  0.5f,  0.5f,   1.0f, 0.0f,
-    //                           
-    //    -0.5f, -0.5f, -0.5f,   0.0f, 1.0f,
-    //     0.5f, -0.5f, -0.5f,   1.0f, 1.0f,
-    //     0.5f, -0.5f,  0.5f,   1.0f, 0.0f,
-    //     0.5f, -0.5f,  0.5f,   1.0f, 0.0f,
-    //    -0.5f, -0.5f,  0.5f,   0.0f, 0.0f,
-    //    -0.5f, -0.5f, -0.5f,   0.0f, 1.0f,
-    //                           
-    //    -0.5f,  0.5f, -0.5f,   0.0f, 1.0f,
-    //     0.5f,  0.5f, -0.5f,   1.0f, 1.0f,
-    //     0.5f,  0.5f,  0.5f,   1.0f, 0.0f,
-    //     0.5f,  0.5f,  0.5f,   1.0f, 0.0f,
-    //    -0.5f,  0.5f,  0.5f,   0.0f, 0.0f,
-    //    -0.5f,  0.5f, -0.5f,   0.0f, 1.0f
-    //};
+    glPrimitiveRestartIndex(std::numeric_limits<uint32_t>::max());
     
-    unsigned VAO, VBO;
-    unsigned EBO;
-    unsigned VAO_way;
-    unsigned VBO_way;
+    unsigned VBO_verts;
 
-    unsigned VBO_tris;
+    unsigned EBO_lines;
+    unsigned VAO_lines;
+    //unsigned VBO_way;
+
+    unsigned EBO_tris;
     unsigned VAO_tris;
     
-    glGenVertexArrays(1, &VAO);
-    glGenVertexArrays(1, &VAO_way);
-    glGenBuffers(1, &VBO);
-    glGenBuffers(1, &VBO_way);
+    //glGenVertexArrays(1, &VAO);
+    //glGenBuffers(1, &VBO);
+
+    glGenBuffers(1, &VBO_verts);
+
+    glGenVertexArrays(1, &VAO_lines);
+    glGenBuffers(1, &EBO_lines);
 
     glGenVertexArrays(1, &VAO_tris);
-    glGenBuffers(1, &VBO_tris);
+    glGenBuffers(1, &EBO_tris);
+
+
+    //glBindBuffer(GL_ARRAY_BUFFER, VBO_verts);
+    //glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(float), verts.data(), GL_STATIC_DRAW);
 
     //glGenBuffers(1, &EBO);
     
-    glBindVertexArray(VAO);
-    {
-        glBindBuffer(GL_ARRAY_BUFFER, VBO);
-        glBufferData(GL_ARRAY_BUFFER, node_coords.size() * sizeof(float), node_coords.data(), GL_STATIC_DRAW);
+    //glBindVertexArray(VAO);
+    //{
+    //    glBindBuffer(GL_ARRAY_BUFFER, VBO);
+    //    glBufferData(GL_ARRAY_BUFFER, node_coords.size() * sizeof(float), node_coords.data(), GL_STATIC_DRAW);
+    //
+    //    //glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
+    //    //glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
+    //
+    //    // positions
+    //    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+    //    glEnableVertexAttribArray(0);
+    //
+    //    // tex coords
+    //    //glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
+    //    //glEnableVertexAttribArray(1);
+    //}
+    //glBindVertexArray(0);
 
-        //glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
-        //glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
+    glBindBuffer(GL_ARRAY_BUFFER, VBO_verts);
+    glBufferData(GL_ARRAY_BUFFER, osmdata.verts.size() * sizeof(float), osmdata.verts.data(), GL_STATIC_DRAW);
+
+    glBindVertexArray(VAO_lines);
+    {
+        glBindBuffer(GL_ARRAY_BUFFER, VBO_verts);
+
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO_lines);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, osmdata.line_indices.size() * sizeof(uint32_t), osmdata.line_indices.data(), GL_STATIC_DRAW);
     
-        // positions
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
-        glEnableVertexAttribArray(0);
-
-        // tex coords
-        //glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
-        //glEnableVertexAttribArray(1);
-    }
-    glBindVertexArray(0);
-
-
-    // Create a VAO for the ways
-    glBindVertexArray(VAO_way);
-    {
-        glBindBuffer(GL_ARRAY_BUFFER, VBO_way);
-        glBufferData(GL_ARRAY_BUFFER, line_verts.size() * sizeof(float), line_verts.data(), GL_STATIC_DRAW);
-
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
         glEnableVertexAttribArray(0);
     }
     glBindVertexArray(0);
+
 
     glBindVertexArray(VAO_tris);
     {
-        glBindBuffer(GL_ARRAY_BUFFER, VBO_tris);
-        glBufferData(GL_ARRAY_BUFFER, tri_verts.size() * sizeof(float), tri_verts.data(), GL_STATIC_DRAW);
+        glBindBuffer(GL_ARRAY_BUFFER, VBO_verts);
+
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO_tris);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, osmdata.tri_indices.size() * sizeof(uint32_t), osmdata.tri_indices.data(), GL_STATIC_DRAW);
 
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
         glEnableVertexAttribArray(0);
@@ -466,23 +475,11 @@ int main(int argc, char* argv[])
     int mvp_loc = shader.get_uniform_loc("MVP");
     int color_loc = shader.get_uniform_loc("in_color");
 
-    
-
-    //constexpr int num_cubes = 30;
-    //std::srand(SDL_GetTicks());
-    //auto cubes = std::make_unique<std::pair<glm::vec3, glm::vec3>[]>(num_cubes);
-    //for (int i = 0; i < num_cubes; ++i)
-    //{
-    //    auto pos_xz = glm::circularRand(3.0f);
-    //    cubes[i].first = glm::vec3(pos_xz[0], 0.0f, pos_xz[1]);
-    //    cubes[i].second = glm::sphericalRand(1.0f);
-    //}
 
     edit_camera camera;
 
     glm::mat4 projection = glm::perspective(glm::radians(45.0f), wnd.aspect_ratio(), 0.1f, 10000.0f);
-
-    //glm::mat4 projection = glm::ortho(-1000.f, 1000.f, -1000.f, 1000.f, 0.001f, 1000.f);//glm::perspective(glm::radians(45.0f), wnd.aspect_ratio(), 0.001f, 100.0f);
+    //glm::mat4 projection = glm::ortho(-1000.f, 1000.f, -1000.f, 1000.f, 0.001f, 1000.f);
 
     uint64_t last_ticks = 0;
 
@@ -494,6 +491,8 @@ int main(int argc, char* argv[])
         uint64_t cur_ticks = SDL_GetTicks64();
         uint64_t delta_ticks = cur_ticks - last_ticks;
         last_ticks = cur_ticks;
+
+        double time = double(SDL_GetTicks64()) / 1000;
 
         camera.new_frame();
 
@@ -522,10 +521,6 @@ int main(int argc, char* argv[])
 
         camera.update();
 
-        double time = double(SDL_GetTicks64()) / 1000;
-        float sin_curve = float((std::sin(time) + 1.0) / 2.0);
-
-        //glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
         glClearColor(1.f, 1.f, 1.f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         
@@ -538,38 +533,35 @@ int main(int argc, char* argv[])
         glm::mat4 mvp = projection * camera.view() * model;
         glUniformMatrix4fv(mvp_loc, 1, GL_FALSE, glm::value_ptr(mvp));
 
-        glBindVertexArray(VAO);
+        //glBindVertexArray(VAO);
+        //{
+        //    glUniform4f(color_loc, 0.0f, 0.0f, 0.0f, 1.0f); // black
+        //    glDrawArrays(GL_POINTS, 0, node_coords.size() / 3);
+        //}
+        //glBindVertexArray(0);
+
+        
+        glBindVertexArray(VAO_lines);
         {
+            // Draw lines
             glUniform4f(color_loc, 0.0f, 0.0f, 0.0f, 1.0f); // black
-            glDrawArrays(GL_POINTS, 0, node_coords.size() / 3);
+            glDrawElements(GL_LINE_STRIP, osmdata.line_indices.size(), GL_UNSIGNED_INT, 0);
         }
         glBindVertexArray(0);
 
-        // Draw the lines
-        glBindVertexArray(VAO_way);
-        {
-            glUniform4f(color_loc, 1.0f, 0.0f, 0.0f, 1.0f); // red
-
-            glMultiDrawArrays(GL_LINE_STRIP, 
-                osmdata.line_startidx.data(), 
-                osmdata.line_counts.data(),
-                GLsizei(osmdata.line_counts.size()));
-        }
-        glBindVertexArray(0);
-
-        // Draw buildings
+        // Draw meshes
         glBindVertexArray(VAO_tris);
         {
             glUniform4f(color_loc, 0.5f, 0.5f, 0.5f, 1.0f); // gray
-            glMultiDrawElements(GL_TRIANGLES, tri_vertcounts.data(), GL_UNSIGNED_INT, tri_indices.data(), tri_indices.size());
+            glDrawElements(GL_TRIANGLES, osmdata.tri_indices.size(), GL_UNSIGNED_INT, 0);
         }
         glBindVertexArray(0);
 
         wnd.update();
     }
 
-    glDeleteVertexArrays(1, &VAO);
-    glDeleteBuffers(1, &VBO);
+    //glDeleteVertexArrays(1, &VAO);
+    //glDeleteBuffers(1, &VBO);
     //glDeleteBuffers(1, &EBO);
 
     return 0;

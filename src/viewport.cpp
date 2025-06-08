@@ -5,7 +5,7 @@
 #include "viewport.hpp"
 
 window::window(const char* name, const char* title, int width, int height) :
-    m_name(name), m_window(nullptr), m_glcontext(nullptr), m_width(width), m_height(height)
+    m_name(name), m_window(nullptr), m_glcontext(nullptr), m_initwidth(width), m_initheight(height)
 {
     logMESSAGE("Initializing %s", name);
 
@@ -88,9 +88,9 @@ bool window::set_fullscreen(bool enable)
     else {
         logMESSAGE("Switching %s to windowed mode", m_name);
 
-        SDL_SetWindowSize(m_window, m_width, m_height);
+        SDL_SetWindowSize(m_window, m_initwidth, m_initheight);
         SDL_SetWindowFullscreen(m_window, 0);
-        glViewport(0, 0, m_width, m_height);
+        glViewport(0, 0, m_initwidth, m_initheight);
 
         return true;
     }
@@ -157,7 +157,7 @@ void edit_camera::process_event(const SDL_Event& event)
         {
             if (m_enable_move)
             {
-                const float sensitivity = 0.01f;
+                const float sensitivity = 1.f;
                 glm::vec3 incr = -sensitivity * (
                     (float(event.motion.xrel) * m_cam_x) +
                     (float(event.motion.yrel) * m_cam_y));

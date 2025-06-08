@@ -40,7 +40,7 @@ private:
     const char* m_name;
     SDL_Window* m_window;
     SDL_GLContext m_glcontext;
-    int m_width, m_height;
+    int m_initwidth, m_initheight;
 };
 
 
