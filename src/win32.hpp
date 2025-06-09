@@ -17,6 +17,9 @@ bool win32_recreate_console() noexcept;
 // Returns true if successful.
 bool win32_enable_console_colors() noexcept;
 
+// Set the console code page to UTF8.
+bool win32_set_utf8_console() noexcept;
+
 // Sleep using a high resolution timer if possible, otherwise just Sleep().
 // (Highres timer is only supported on Windows 10 1803 and later).
 void win32_sleep_ns(uint64_t ns) noexcept;

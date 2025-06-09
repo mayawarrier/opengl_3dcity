@@ -23,6 +23,10 @@
 
 #include <mapbox/earcut.hpp>
 
+#include <CGAL/Exact_predicates_inexact_constructions_kernel.h>
+#include <CGAL/Surface_mesh.h>
+#include <CGAL/Polygon_mesh_processing/corefinement.h>
+
 #include "utils.hpp"
 #include "glutils.hpp"
 #include "viewport.hpp"
@@ -52,6 +56,12 @@ static bool str_equal(const char* str1, const char* str2)
     if (str2 && !str1) { return false; }
     if (!str2 && !str1) { return true; }
     return std::strcmp(str1, str2) == 0;
+}
+
+template <typename T>
+static bool parse_num_if_exists(const char* str, T& val)
+{
+    return str && parse_num(str, val);
 }
 
 static osmium::geom::Coordinates calc_center(const osmium::NodeRefList& nr_list)
@@ -113,20 +123,18 @@ public:
         }
         else if (tags.has_key("building") || str_equal(tags["building:part"], "yes"))
         {
-            const char* height_str, *levels_str;
-            if ((height_str = tags["height"]))
-            {
-                double height;
-                std::from_chars(height_str, height_str + std::strlen(height_str), height);
-                add_building(nodes, height);
-            }
-            else if ((levels_str = tags["building:levels"]))
-            {
-                int levels;
-                std::from_chars(levels_str, levels_str + std::strlen(levels_str), levels);
-                add_building(nodes, levels * 3.0);
-            }
-            else { add_building(nodes, 3.0); }
+            int levels, min_level;
+            double height, min_height;
+
+            bool has_levels = parse_num_if_exists(tags["building:levels"], levels);
+            bool has_minlevel = parse_num_if_exists(tags["building:min_level"], min_level);
+            bool has_height = parse_num_if_exists(tags["height"], height);
+            bool has_minheight = parse_num_if_exists(tags["min_height"], min_height);
+
+            double final_height = has_height ? height : (has_levels ? (3.0 * levels) : 3.0);
+            double final_minheight = has_minheight ? min_height : (has_minlevel ? (3.0 * min_level) : 0.0);
+
+            add_building(nodes, final_minheight, final_height);
         }
     }
 
@@ -245,7 +253,7 @@ private:
         return vert_startidx;
     }
 
-    void add_building(const osmium::NodeRefList& nodes, double height)
+    void add_building(const osmium::NodeRefList& nodes, double min_height, double height)
     {
         std::vector<std::vector<osmium::geom::Coordinates>> earcut_polylines;
         earcut_polylines.resize(1); // earcut needs a vector of polylines
@@ -258,11 +266,11 @@ private:
 
         auto topbot_indices = mapbox::earcut<uint32_t>(earcut_polylines);
 
-        uint32_t bot_verts_idx = add_polygon(node_verts, topbot_indices, 0.0);    // bottom face
-        uint32_t top_verts_idx = add_polygon(node_verts, topbot_indices, height); // top face
+        uint32_t bot_verts_idx = add_polygon(node_verts, topbot_indices, min_height); // bottom face
+        uint32_t top_verts_idx = add_polygon(node_verts, topbot_indices, height);     // top face
 
         // bottom and top outlines
-        add_polyline(node_verts, 0.0, nodes.is_closed());
+        add_polyline(node_verts, min_height, nodes.is_closed());
         add_polyline(node_verts, height, nodes.is_closed());
 
         // sides
@@ -338,6 +346,10 @@ int main(int argc, char* argv[])
         return -1;
     }
 
+#ifdef _WIN32
+    SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
+#endif
+
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
         logERROR("SDL_Init(): %s", SDL_GetError());
         return false;
@@ -348,12 +360,14 @@ int main(int argc, char* argv[])
         return -1;
     }
 
-    window wnd("MAIN_WINDOW", "3D City", 900, 750);
+    window wnd("MAIN_WINDOW", "3D City", { 900, 750 });
     if (!wnd.ok()) {
         return -1;
     }
 
-    //wnd.set_fullscreen(true);
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_PRIMITIVE_RESTART);
+    glPrimitiveRestartIndex(std::numeric_limits<uint32_t>::max());
 
     osm_data osmdata;
     if (!read_osmfile("assets/maps/testmap.osm", osmdata)) {
@@ -392,10 +406,7 @@ int main(int argc, char* argv[])
     //    return -1;
     //}
 
-    glEnable(GL_DEPTH_TEST);
-    glEnable(GL_PRIMITIVE_RESTART);
-
-    glPrimitiveRestartIndex(std::numeric_limits<uint32_t>::max());
+    
     
     unsigned VBO_verts;
 
@@ -541,9 +552,9 @@ int main(int argc, char* argv[])
         //glBindVertexArray(0);
 
         
+        // Draw lines
         glBindVertexArray(VAO_lines);
         {
-            // Draw lines
             glUniform4f(color_loc, 0.0f, 0.0f, 0.0f, 1.0f); // black
             glDrawElements(GL_LINE_STRIP, osmdata.line_indices.size(), GL_UNSIGNED_INT, 0);
         }

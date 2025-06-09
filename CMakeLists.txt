@@ -68,6 +68,9 @@ target_link_libraries(3dcity PUBLIC EXPAT::EXPAT)
 
 # -----------------------------------------------------------------------------
 
+find_package(CGAL CONFIG REQUIRED)
+target_link_libraries(3dcity PRIVATE CGAL::CGAL)
+
 
 find_package(SDL2 CONFIG REQUIRED)
 target_link_libraries(3dcity

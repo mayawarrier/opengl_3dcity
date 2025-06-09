@@ -4,8 +4,45 @@
 
 #include "viewport.hpp"
 
-window::window(const char* name, const char* title, int width, int height) :
-    m_name(name), m_window(nullptr), m_glcontext(nullptr), m_initwidth(width), m_initheight(height)
+
+struct fullscreen_info
+{
+    size size;
+    int disp_idx;
+};
+
+static bool get_fullscreen_info(fullscreen_info& out_info)
+{
+    SDL_Point mouse_pos;
+    SDL_GetGlobalMouseState(&mouse_pos.x, &mouse_pos.y);
+
+    for (int i = 0; i < SDL_GetNumVideoDisplays(); ++i)
+    {
+        SDL_Rect disp_bounds;
+        if (SDL_GetDisplayBounds(i, &disp_bounds) == 0 && 
+            SDL_PointInRect(&mouse_pos, &disp_bounds)) 
+        {
+            SDL_DisplayMode desired = { 0 };
+            desired.w = disp_bounds.w;
+            desired.h = disp_bounds.h;
+            
+            SDL_DisplayMode closest;
+            if (SDL_GetClosestDisplayMode(i, &desired, &closest) == nullptr) {
+                logERROR("SDL_GetClosestDisplayMode(): %s", SDL_GetError());
+                return false;
+            }
+
+            out_info.size.width = closest.w;
+            out_info.size.height = closest.h;
+            out_info.disp_idx = i;
+            return true;
+        }
+    }
+    return false;
+}
+
+window::window(const char* name, const char* title, ::size size, bool fullscreen) :
+    m_name(name), m_window(nullptr), m_glcontext(nullptr)
 {
     logMESSAGE("Initializing %s", name);
 
@@ -16,8 +53,28 @@ window::window(const char* name, const char* title, int width, int height) :
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, want_glversion.minor);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
 
+    int disp_idx = 0;
+    uint32_t window_flags = SDL_WINDOW_OPENGL | SDL_WINDOW_ALLOW_HIGHDPI;
+    
+    if (fullscreen)
+    {
+        fullscreen_info info;
+        if (!get_fullscreen_info(info)) {
+            logERROR("get_fullscreen_info() failed");
+            return;
+        }
+        size = info.size;
+        disp_idx = info.disp_idx;
+        window_flags |= SDL_WINDOW_FULLSCREEN;
+
+        logMESSAGE("Using display %d (%s) with size %d x %d", 
+            disp_idx, SDL_GetDisplayName(disp_idx), size.width, size.height);
+    }
+
     this->m_window = SDL_CreateWindow(title,
-        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, width, height, SDL_WINDOW_OPENGL);
+        SDL_WINDOWPOS_CENTERED_DISPLAY(disp_idx), 
+        SDL_WINDOWPOS_CENTERED_DISPLAY(disp_idx), 
+        size.width, size.height, window_flags);
     if (!this->m_window) {
         logERROR("SDL_CreateWindow(): %s", SDL_GetError());
         cleanup();
@@ -52,57 +109,15 @@ window::window(const char* name, const char* title, int width, int height) :
     }
 }
 
-bool window::set_fullscreen(bool enable)
-{
-    if (enable) 
-    {
-        logMESSAGE("Switching %s to fullscreen mode", m_name);
-
-        int disp_idx = SDL_GetWindowDisplayIndex(m_window);
-        if (disp_idx < 0) {
-            logERROR("SDL_GetWindowDisplayIndex(): %s", SDL_GetError());
-            return false;
-        }
-        SDL_Rect disp_bounds;
-        if (SDL_GetDisplayBounds(disp_idx, &disp_bounds) != 0) {
-            logERROR("SDL_GetDisplayBounds(): %s", SDL_GetError());
-            return false;
-        }
-
-        SDL_DisplayMode desired = { 0 };
-        desired.w = disp_bounds.w;
-        desired.h = disp_bounds.h;
-
-        SDL_DisplayMode closest;
-        if (SDL_GetClosestDisplayMode(disp_idx, &desired, &closest) == nullptr) {
-            logERROR("SDL_GetClosestDisplayMode(): %s", SDL_GetError());
-            return false;
-        }
-
-        SDL_SetWindowSize(m_window, closest.w, closest.h);
-        SDL_SetWindowFullscreen(m_window, SDL_WINDOW_FULLSCREEN);
-        glViewport(0, 0, closest.w, closest.h);
-
-        return true;
-    }
-    else {
-        logMESSAGE("Switching %s to windowed mode", m_name);
-
-        SDL_SetWindowSize(m_window, m_initwidth, m_initheight);
-        SDL_SetWindowFullscreen(m_window, 0);
-        glViewport(0, 0, m_initwidth, m_initheight);
-
-        return true;
-    }
-}
-
 void window::cleanup() noexcept
 {
     if (this->m_glcontext) {
         SDL_GL_DeleteContext(this->m_glcontext);
+        this->m_glcontext = nullptr;
     }
     if (this->m_window) {
         SDL_DestroyWindow(this->m_window);
+        this->m_window = nullptr;
     }
 }
 

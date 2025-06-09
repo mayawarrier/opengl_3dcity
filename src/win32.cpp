@@ -42,6 +42,15 @@ static void log_lasterror(const char* fn_name) noexcept
         fn_name, err, err_to_str(err).c_str());
 }
 
+bool win32_set_utf8_console() noexcept
+{
+    if (!SetConsoleOutputCP(CP_UTF8)) {
+        log_lasterror("SetConsoleOutputCP");
+        return false;
+    }
+    return true;
+}
+
 bool win32_recreate_console() noexcept
 {
     if (AttachConsole(ATTACH_PARENT_PROCESS))
@@ -147,3 +156,4 @@ void win32_sleep_ns(uint64_t ns) noexcept
 #else
 void win32_sleep_ns(uint64_t ns) { Sleep(DWORD(ns / NS_PER_MS)); }
 #endif
+

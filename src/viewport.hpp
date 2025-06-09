@@ -1,15 +1,29 @@
 #ifndef VIEWPORT_HPP
 #define VIEWPORT_HPP
 
+#include <cstdint>
 #include <SDL2/SDL.h>
 #include <glm/glm.hpp>
 #include <glm/mat4x4.hpp>
 #include "utils.hpp"
 
+
+
 class window
 {
 public:
-    window(const char* name, const char* title, int width, int height);
+    struct fullscreen_t { explicit fullscreen_t() = default; };
+    static constexpr fullscreen_t fullscreen;
+
+public:
+    window(const char* name, const char* title, ::size size) :
+        window(name, title, size, false)
+    {}
+
+    window(const char* name, fullscreen_t) :
+        window(name, name, { 0, 0 }, true)
+    {}
+
     ~window() noexcept { cleanup(); }
 
     bool ok() const { return this->m_window && this->m_glcontext; }
@@ -27,20 +41,18 @@ public:
         return float(s.width) / s.height;
     }
 
-    // Returns true on success.
-    bool set_fullscreen(bool enable);
-
     // Swap buffers and update screen.
     void update() { SDL_GL_SwapWindow(this->m_window); }
 
 private:
+    window(const char* name, const char* title, ::size size, bool fullscreen);
+
     void cleanup() noexcept;
 
 private:
     const char* m_name;
     SDL_Window* m_window;
     SDL_GLContext m_glcontext;
-    int m_initwidth, m_initheight;
 };
 
 

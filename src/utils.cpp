@@ -42,6 +42,8 @@ bool log_init(const char* logfile)
 
 #ifdef _WIN32
     LOG_COLOR_CONSOLE = win32_enable_console_colors();
+    win32_set_utf8_console(); // ignore error
+
 #elif defined(HAS_POSIX_2001)
     LOG_COLOR_CONSOLE = posix_has_term_colors();
 #endif

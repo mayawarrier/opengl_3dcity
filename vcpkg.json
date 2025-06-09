@@ -6,6 +6,7 @@
     },
     "sdl2",
     "glm",
-    "earcut-hpp"
+    "earcut-hpp",
+    "cgal"
   ]
 }
