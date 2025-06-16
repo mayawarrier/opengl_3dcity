@@ -23,6 +23,22 @@
 
 #define NS_PER_MS 1000000
 
+#define MOVE_ONLY_CLASS(classname, handlename, handlenull)           \
+    classname(const classname&) = delete;                            \
+    classname& operator=(const classname&) = delete;                 \
+                                                                     \
+    classname(classname&& rhs) noexcept :                            \
+        handlename(std::exchange(rhs.handlename, handlenull))        \
+    {}                                                               \
+    classname& operator=(classname&& rhs) noexcept {                 \
+        if (this != &rhs) {                                          \
+            handlename = std::exchange(rhs.handlename, handlenull);  \
+        }                                                            \
+        return *this;                                                \
+    }                                                                \
+    bool ok() const noexcept { return handlename != handlenull; }    \
+
+
 #ifdef __clang__
 #define PUSH_WARNINGS _Pragma("clang diagnostic push")
 #define POP_WARNINGS  _Pragma("clang diagnostic pop")
@@ -38,6 +54,7 @@
 #define POP_WARNINGS
 #define IGNORE_WFORMAT_SECURITY
 #endif
+
 
 namespace fs = std::filesystem;
 namespace tim = std::chrono;

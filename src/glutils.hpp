@@ -4,20 +4,8 @@
 #include "utils.hpp"
 
 
-#define GL_CLASS(classname, handlename)                                             \
-    classname(const classname&) = delete;                                           \
-    classname& operator=(const classname&) = delete;                                \
-                                                                                    \
-    classname(classname&& rhs) noexcept :                                           \
-        handlename(std::exchange(rhs.handlename, 0))                                \
-    {}                                                                              \
-    classname& operator=(classname&& rhs) noexcept {                                \
-        if (this != &rhs) { handlename = std::exchange(rhs.handlename, 0); }        \
-        return *this;                                                               \
-    }                                                                               \
-    bool ok() const noexcept { return handlename != 0; }                            \
-    unsigned handle() const noexcept { return handlename; }
-
+#define GL_CLASS(classname, handlename) \
+    MOVE_ONLY_CLASS(classname, handlename, 0)
 
 class texture2d
 {
@@ -25,6 +13,8 @@ public:
     texture2d(const fs::path& path);
 
     GL_CLASS(texture2d, m_handle)
+
+    unsigned handle() const noexcept { return m_handle; }
 
     ~texture2d() noexcept;
 

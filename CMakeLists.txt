@@ -11,6 +11,10 @@ set(SOURCES
     "src/glutils.cpp"
     "src/viewport.hpp"
     "src/viewport.cpp"
+    "src/osm/mesh.hpp"
+    "src/osm/mesh.cpp"
+    "src/osm/osm.hpp"
+    "src/osm/osm.cpp"
     "src/main.cpp")
 
 if (WIN32)
@@ -42,7 +46,7 @@ add_dependencies(3dcity 3dcity_assets)
 if (MINGW)
     target_link_options(3dcity PRIVATE "-Wl,-subsystem,windows")
 elseif (WIN32)
-    target_link_options(3dcity PRIVATE "/SUBSYSTEM:WINDOWS")
+    #target_link_options(3dcity PRIVATE "/SUBSYSTEM:WINDOWS")
 endif()
 
 if (WIN32)
@@ -51,6 +55,16 @@ endif()
 
 find_path(EARCUT_HPP_INCLUDE_DIRS "mapbox/earcut.hpp")
 target_include_directories(3dcity PRIVATE ${EARCUT_HPP_INCLUDE_DIRS})
+
+find_package(Boost REQUIRED COMPONENTS geometry)
+target_link_libraries(3dcity PRIVATE Boost::geometry)
+
+find_package(CGAL CONFIG REQUIRED)
+target_link_libraries(3dcity PRIVATE CGAL::CGAL)
+
+#find_package(CGAL COMPONENTS CGAL::Qt6)
+#target_compile_definitions(3dcity CGAL_USE_BASIC_VIEWER=1)
+#target_link_libraries(3dcity PUBLIC CGAL::Qt6)
 
 # -------------------------------- OSMIUM ------------------------------------
 
@@ -67,10 +81,6 @@ find_package(EXPAT REQUIRED)
 target_link_libraries(3dcity PUBLIC EXPAT::EXPAT)
 
 # -----------------------------------------------------------------------------
-
-find_package(CGAL CONFIG REQUIRED)
-target_link_libraries(3dcity PRIVATE CGAL::CGAL)
-
 
 find_package(SDL2 CONFIG REQUIRED)
 target_link_libraries(3dcity
