@@ -3,7 +3,7 @@
 #include <osmium/handler/node_locations_for_ways.hpp>
 #include <osmium/area/assembler.hpp>
 #include <osmium/area/multipolygon_manager.hpp>
-#include <osmium/io/any_input.hpp>
+#include <osmium/io/xml_input.hpp>
 #include <osmium/visitor.hpp>
 #include <osmium/geom/coordinates.hpp>
 #include <osmium/geom/mercator_projection.hpp>
@@ -111,25 +111,48 @@ public:
 
     osm_data to_osmdata()
     {
-        //auto center = avg_vert(m_verts);
-        //
-        //std::vector<float> verts_float;
-        //verts_float.resize(m_verts.size());
-        //
-        //for (size_t i = 0; i < m_verts.size(); i += 3) {
-        //    verts_float[i + 0] = m_verts[i + 0] - center.x;
-        //    verts_float[i + 1] = m_verts[i + 1] - center.y;
-        //    verts_float[i + 2] = m_verts[i + 2] - center.z;
-        //}
-        //return {
-        //    .verts = std::move(verts_float),
-        //    .tri_indices = std::move(m_tri_indices),
-        //    .line_indices = std::move(m_line_indices)
-        //};
+        
         auto meshes = m_building_assembler.get_draw_data();
         logMESSAGE("Num meshes %d", meshes.size());
 
-        return {};
+        // traverse all meshes and collect vertices and indices, center them
+        std::vector<float> verts;
+        std::vector<uint32_t> line_indices;
+        std::vector<uint32_t> tri_indices;
+
+        for (const auto& mesh : meshes) 
+        {
+            size_t verts_startidx = verts.size() / 3;
+            verts.insert(verts.end(), mesh.verts.begin(), mesh.verts.end());
+            //m_line_indices.insert(m_line_indices.end(), mesh.line_indices.begin(), mesh.line_indices.end());
+
+            for (const auto& tri_index : mesh.tri_indices) {
+                tri_indices.push_back(tri_index + verts_startidx);
+            }
+            for (size_t i = 0; i < mesh.line_indices.size(); i += 3) {
+                line_indices.push_back(mesh.line_indices[i + 0] + verts_startidx);
+                line_indices.push_back(mesh.line_indices[i + 1] + verts_startidx);
+                line_indices.push_back(mesh.line_indices[i + 2]);
+            }
+
+            //tri_indices.insert(tri_indices.end(), mesh.tri_indices.begin(), mesh.tri_indices.end());
+        }
+
+        auto center = avg_vert(verts);
+        
+        std::vector<float> verts_float;
+        verts_float.resize(verts.size());
+        
+        for (size_t i = 0; i < verts.size(); i += 3) {
+            verts_float[i + 0] = verts[i + 0] - center.x;
+            verts_float[i + 1] = verts[i + 1] - center.y;
+            verts_float[i + 2] = verts[i + 2] - center.z;
+        }
+        return {
+            .verts = std::move(verts_float),
+            .tri_indices = std::move(tri_indices),
+            .line_indices = std::move(line_indices)
+        };
     }
 
 private:

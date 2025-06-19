@@ -49,13 +49,20 @@ struct bbox2d
     }
 };
 
+enum orient
+{
+    ORIENT_CCW, // counter-clockwise
+    ORIENT_CW,  // clockwise
+    ORIENT_COLL // collinear
+};
+
 template <typename TVert>
 struct draw_data
 {
     std::string name;
     std::vector<TVert> verts;
     std::vector<uint32_t> tri_indices;
-    std::vector<uint32_t> strip_indices;
+    std::vector<uint32_t> line_indices;
 };
 
 using draw_dataf = draw_data<float>;
@@ -67,7 +74,7 @@ using draw_datad = draw_data<double>;
 class building_assembler
 {
 public:
-    void add_building(const osmium::Way& way, 
+    bool add_building(const osmium::Way& way, 
         const char* name, bool is_part, double ht_bottom, double ht_top);
 
     std::vector<draw_datad> get_draw_data();
@@ -76,10 +83,10 @@ public:
     struct part
     {
         osmium::object_id_type id;
+        orient orient;
         bbox2d bbox;
         double ht_btm, ht_top;
         std::vector<osmium::geom::Coordinates> coords;
-        bool is_closed;
     };
 
     struct building
