@@ -42,7 +42,7 @@ static void log_lasterror(const char* fn_name) noexcept
         fn_name, err, err_to_str(err).c_str());
 }
 
-bool win32_set_utf8_console() noexcept
+bool win32_console_enable_utf8() noexcept
 {
     if (!SetConsoleOutputCP(CP_UTF8)) {
         log_lasterror("SetConsoleOutputCP");
@@ -51,7 +51,7 @@ bool win32_set_utf8_console() noexcept
     return true;
 }
 
-bool win32_recreate_console() noexcept
+bool win32_console_recreate() noexcept
 {
     if (AttachConsole(ATTACH_PARENT_PROCESS))
     {
@@ -105,7 +105,7 @@ static bool set_color_mode(DWORD nstdhandle) noexcept
     return true;
 }
 
-bool win32_enable_console_colors() noexcept
+bool win32_console_enable_colors() noexcept
 {
     if (!set_color_mode(STD_OUTPUT_HANDLE)) {
         return false;

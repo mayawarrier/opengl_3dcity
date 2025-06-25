@@ -60,9 +60,19 @@ public:
     {
         auto& tags = way.tags();
 
-        if (tags.has_key("highway"))
+        auto* highway_key = tags["highway"];
+
+        if (highway_key && !str_equal(highway_key, "footway"))
         {
             //add_polyline_from_nodes(nodes);
+            m_mesh_builder.add_street({
+                .way = {
+                    .id = way.id(),
+                    .name = tags["name"],
+                    .nodes = way.nodes(),
+                },
+                .width = 10
+            });
         }
         else
         {
@@ -79,14 +89,19 @@ public:
                 bool has_height    = parse_num_if_exists(tags["height"], height);
                 bool has_minheight = parse_num_if_exists(tags["min_height"], min_height);
 
-                double final_height = has_height ? height : 
-                    (has_levels ? (3.0 * levels) : 3.0);
-                
-                double final_minheight = has_minheight ? min_height : 
-                    (has_minlevel ? (3.0 * min_level) : 0.0);
+                double ht_top = has_height ? height : (has_levels ? (3.0 * levels) : 3.0);
+                double ht_btm = has_minheight ? min_height : (has_minlevel ? (3.0 * min_level) : 0.0);
 
-                m_building_assembler.add_building(way, tags["name"], 
-                    is_building_part, final_minheight, final_height);
+                m_mesh_builder.add_building({
+                    .way = {
+                        .id = way.id(),
+                        .name = tags["name"],                        
+                        .nodes = way.nodes(),
+                    },
+                    .is_part = is_building_part,
+                    .ht_btm = ht_btm,
+                    .ht_top = ht_top
+                });
             }
         }
     }
@@ -112,7 +127,7 @@ public:
     osm_data to_osmdata()
     {
         
-        auto meshes = m_building_assembler.get_draw_data();
+        auto meshes = m_mesh_builder.get_draw_data();
         logMESSAGE("Num meshes %d", meshes.size());
 
         // traverse all meshes and collect vertices and indices, center them
@@ -156,7 +171,7 @@ public:
     }
 
 private:
-    building_assembler m_building_assembler;
+    mesh_builder m_mesh_builder;
 
 private:
     //std::vector<double> node_coords;

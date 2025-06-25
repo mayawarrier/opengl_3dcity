@@ -10,15 +10,15 @@
 // print to the console that launched the app (see https://stackoverflow.com/questions/493536).
 // Compiling as a console app will always spawn a console at startup, which is undesirable.
 //
-bool win32_recreate_console() noexcept;
+bool win32_console_recreate() noexcept;
 
 // Try to enable console colors.
 // (only supported on some versions of Windows 10 and later).
 // Returns true if successful.
-bool win32_enable_console_colors() noexcept;
+bool win32_console_enable_colors() noexcept;
 
 // Set the console code page to UTF8.
-bool win32_set_utf8_console() noexcept;
+bool win32_console_enable_utf8() noexcept;
 
 // Sleep using a high resolution timer if possible, otherwise just Sleep().
 // (Highres timer is only supported on Windows 10 1803 and later).

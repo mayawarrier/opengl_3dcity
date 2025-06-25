@@ -8,6 +8,10 @@
     "glm",
     "earcut-hpp",
     "boost-geometry",
+    {
+      "name": "boost-container",
+      "version>=": "1.88.0"
+    },
     "cgal"
   ]
 }

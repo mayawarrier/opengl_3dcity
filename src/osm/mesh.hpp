@@ -4,57 +4,11 @@
 
 #include <string>
 #include <vector>
-#include <glm/glm.hpp>
 
-#include <osmium/geom/coordinates.hpp>
+#include <osmium/osm/types.hpp>
 #include <osmium/fwd.hpp>
 
-
-struct bbox2d
-{
-    glm::dvec2 min;
-    glm::dvec2 max;
-
-    bbox2d() :
-        min(std::numeric_limits<double>::infinity()),
-        max(-std::numeric_limits<double>::infinity())
-    {}
-
-    void extend(const bbox2d& other)
-    {
-        this->min = glm::min(this->min, other.min);
-        this->max = glm::max(this->max, other.max);
-    }
-
-    void extend(glm::dvec2 point)
-    {
-        this->min = glm::min(this->min, point);
-        this->max = glm::max(this->max, point);
-    }
-
-    glm::vec2 center() const {
-        return (min + max) / 2.0;
-    }
-
-    bool intersects(const bbox2d& rhs) const
-    {
-        // Check if there is some overlap on the right 
-        // (i.e. min before other box's max) and some overlap 
-        // on the left (max after other box's min)
-        return
-            this->min.x <= rhs.max.x &&
-            this->min.y <= rhs.max.y &&
-            this->max.x >= rhs.min.x &&
-            this->max.y >= rhs.min.y;
-    }
-};
-
-enum orient
-{
-    ORIENT_CCW, // counter-clockwise
-    ORIENT_CW,  // clockwise
-    ORIENT_COLL // collinear
-};
+#include "geom.hpp"
 
 template <typename TVert>
 struct draw_data
@@ -69,39 +23,77 @@ using draw_dataf = draw_data<float>;
 using draw_datad = draw_data<double>;
 
 
-// Matches buildings to their parts and converts them into
-// a set of meshes/lines that can be rendered by opengl.
-class building_assembler
+// Processes OSM data into a set of meshes/lines 
+// that can be rendered by opengl.
+class mesh_builder
 {
 public:
-    bool add_building(const osmium::Way& way, 
-        const char* name, bool is_part, double ht_bottom, double ht_top);
+    struct way_info
+    {
+        osmium::object_id_type id;
+        const char* name;
+        const osmium::NodeRefList& nodes;
+    };
+
+    struct building_info
+    {
+        way_info way;
+        bool is_part;
+        double ht_btm, ht_top; // in meters
+    };
+
+    struct street_info
+    {
+        way_info way;
+        double width; // in meters
+    };
+
+    bool add_building(const building_info& info);
+
+    bool add_street(const street_info& info);
 
     std::vector<draw_datad> get_draw_data();
 
 public:
-    struct part
+    struct building_part
     {
         osmium::object_id_type id;
         orient orient;
         bbox2d bbox;
         double ht_btm, ht_top;
-        std::vector<osmium::geom::Coordinates> coords;
+        std::vector<osmpoint> verts;
     };
 
     struct building
     {
+        building_part info;
         std::string name;
-        part info;
-        std::vector<part*> parts;
+        std::vector<building_part*> parts;
+    };
+
+    struct way_node
+    {
+        osmium::object_id_type id;
+        osmpoint vert;
+    };
+
+    struct street_way
+    {
+        osmium::object_id_type id;
+        std::string name;
+        double width;
+        std::vector<way_node> nodes;
     };
 
 private:
-    bool get_part(const osmium::Way& way,
-        double ht_bottom, double ht_top, part& part);
+    bool get_building_part(const building_info& info, building_part& part);
+
+    bool add_building_drawdata(std::vector<draw_datad>& drawdata);
+    bool add_street_drawdata(std::vector<draw_datad>& drawdata);
 
     std::vector<building> m_buildings;
-    std::vector<part> m_parts;
+    std::vector<building_part> m_building_parts;
+    std::vector<street_way> m_streetways;
 };
 
 #endif

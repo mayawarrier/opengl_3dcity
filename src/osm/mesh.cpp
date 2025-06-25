@@ -1,27 +1,27 @@
 
-#include <unordered_map>
 #include <algorithm>
 #include <span>
-#include <concepts>
+#include <unordered_map>
 #include <ranges>
 
-#include <glm/glm.hpp>
-
-#include <osmium/io/xml_input.hpp>
+#include <osmium/osm/node_ref_list.hpp>
 #include <osmium/geom/coordinates.hpp>
 #include <osmium/geom/mercator_projection.hpp>
+
+#include <boost/unordered/unordered_flat_map.hpp>
+#include <boost/container/flat_set.hpp>
+#include <boost/functional/hash.hpp>
 
 #include <CGAL/Exact_predicates_exact_constructions_kernel.h>
 #include <CGAL/Polygon_mesh_processing/repair.h>
 #include <CGAL/Surface_mesh.h>
 #include <CGAL/Polygon_mesh_processing/corefinement.h>
 
-#include <boost/geometry.hpp>
-#include <mapbox/earcut.hpp>
-
 #include "../utils.hpp"
 #include "mesh.hpp"
 
+
+namespace ranges = std::ranges;
 
 namespace CGALPMP = CGAL::Polygon_mesh_processing;
 
@@ -31,304 +31,81 @@ using cgalmesh = CGAL::Surface_mesh<typename Kernel::Point_3>;
 template <typename Kernel>
 using cgalpoint = typename Kernel::Point_3;
 
-using osmpoint = osmium::geom::Coordinates;
-using osmsegment = std::pair<osmpoint, osmpoint>;
-
-template <typename T, typename U>
-concept has_value_type = std::same_as<typename T::value_type, U>;
-
-
-// Check for proper intersection of line segments (i.e. not parallel, and not at endpoints).
-// https://en.wikipedia.org/wiki/Line%E2%80%93line_intersection
-static bool segments_proper_intersect(const osmsegment& seg1, const osmsegment& seg2)
-{
-    constexpr double eps = 1e-9;
-    osmpoint a1 = seg1.first, a2 = seg1.second;
-    osmpoint b1 = seg2.first, b2 = seg2.second;
-
-    double denom = (a1.x - a2.x) * (b1.y - b2.y) - (a1.y - a2.y) * (b1.x - b2.x);
-    if (std::abs(denom) < eps) {
-        return false;
-    }
-    double t = ((a1.x - b1.x) * (b1.y - b2.y) - (a1.y - b1.y) * (b1.x - b2.x)) / denom;
-    double u = ((a1.y - a2.y) * (a1.x - b1.x) - (a1.x - a2.x) * (a1.y - b1.y)) / denom;
-
-    return (t > eps) && (t < 1.0 - eps) && (u > eps) && (u < 1.0 - eps);
-}
-
-static bool polygon_covered_by(const std::vector<osmpoint>& inner, const std::vector<osmpoint>& outer)
-{
-    namespace bg = boost::geometry;
-    using point_t = bg::model::d2::point_xy<double>;
-    using polygon_t = bg::model::polygon<point_t>;
-
-    polygon_t bg_outer;
-    for (size_t i = 0; i < outer.size(); ++i) {
-        bg::append(bg_outer, point_t(outer[i].x, outer[i].y));
-    }
-
-    for (size_t i = 0; i < inner.size(); ++i) {
-        if (!bg::covered_by(point_t(inner[i].x, inner[i].y), bg_outer)) {
-            return false;
-        }
-    }
-
-    // Check for intersections between polygon edges.
-    // Check only for proper intersections to avoid rejecting cases
-    // where the inner polygon is on the border of the outer polygon - 
-    // there are some weird cases where this will produce false positives
-    // but they are unlikely.
-    for (size_t icurB = 0; icurB < inner.size(); ++icurB)
-    {
-        size_t inextB = (icurB + 1) % inner.size();
-        for (size_t icurA = 0; icurA < outer.size(); ++icurA)
-        {
-            size_t inextA = (icurA + 1) % outer.size();
-
-            osmsegment segA{ outer[icurA], outer[inextA] };
-            osmsegment segB{ inner[icurB], inner[inextB] };
-
-            if (segments_proper_intersect(segA, segB)) {
-                return false;
-            }
-        }
-    }
-    return true;
-}
-
-// https://en.wikipedia.org/wiki/Shoelace_formula
-template <typename T> 
-    requires has_value_type<T, osmpoint>
-static orient polygon_orient(const T& coords)
-{
-    double orient = 0.0;
-    for (size_t icur = 0; icur < coords.size(); ++icur) 
-    {
-        size_t inext = (icur + 1) % coords.size();
-
-        double term1 = coords[icur].y + coords[inext].y;
-        double term2 = coords[icur].x - coords[inext].x;
-        orient += term1 * term2;
-    }
-
-    if (orient > 0) {
-        return ORIENT_CCW;
-    } else if (orient < 0) {
-        return ORIENT_CW;
-    } else {
-        return ORIENT_COLL;
-    }
-}
-
-//static osmpoint calc_center(const osmium::NodeRefList& nr_list)
-//{
-//    osmpoint c{ 0.0, 0.0 };
-//    for (const auto& nr : nr_list) {
-//        c.x += nr.lon();
-//        c.y += nr.lat();
-//    }
-//
-//    c.x /= static_cast<double>(nr_list.size());
-//    c.y /= static_cast<double>(nr_list.size());
-//    return c;
-//}
-
-template <typename T>
-struct aabb_traits 
-{
-    bbox2d b;
-    static const bbox2d& get_bbox(const T& obj) {
-        (void)obj;
-        return b;
-    }
-};
 
 template <>
-struct aabb_traits<building_assembler::building*>
+struct aabb_traits<mesh_builder::building*>
 {
-    static const bbox2d& get_bbox(building_assembler::building* building) {
+    static const bbox2d& get_bbox(mesh_builder::building* building) {
         return building->info.bbox;
     }
 };
 
-// Axis-aligned bounding box tree.
-// Accelerates intersection queries.
-template <typename T>
-class aabb_tree
+bool mesh_builder::get_building_part(const building_info& info, building_part& out_part)
 {
-private:
-    struct node
-    {
-        node* left;
-        node* right;
-        bbox2d bbox;
-    };
-
-    struct leafnode : public node
-    {
-        T data;
-    };
-
-public:
-    aabb_tree() :
-        m_root(nullptr)
-    {}
-
-    // Changes the order of the source array!
-    static aabb_tree create_unsafe(T* objects, size_t num_objects) {
-        return { objects, num_objects };
-    }
-
-    MOVE_ONLY_CLASS(aabb_tree, m_root, nullptr)
-
-    std::vector<T> intersect(const bbox2d& bbox) const
-    {
-        std::vector<T> ret;
-        std::vector<node*> candidates;
-
-        auto insert_if_intersects = [&](node* node) {
-            if (node && node->bbox.intersects(bbox))
-                candidates.push_back(node);
-        };
-
-        insert_if_intersects(m_root);
-
-        while (!candidates.empty())
-        {
-            node* node = candidates.back();
-            candidates.pop_back();
-
-            // If it intersects, descend further down the tree
-            insert_if_intersects(node->left);
-            insert_if_intersects(node->right);
-
-            if (!node->left && !node->right) {
-                auto* leaf = (leafnode*)node;
-                ret.push_back(leaf->data);
-            }
-        }
-        return ret;
-    }
-
-    ~aabb_tree() {
-        delete_tree(m_root);
-    }
-
-private:
-    aabb_tree(T* objects, size_t num_objects) :
-        m_root(make_tree(objects, num_objects))
-    {}
-
-    static node* make_tree(T* objects, size_t num_objects)
-    {
-        if (num_objects == 0) {
-            return nullptr;
-        }
-        else if (num_objects == 1)
-        {
-            auto* node = new leafnode();
-            node->left = nullptr;
-            node->right = nullptr;
-            node->bbox = aabb_traits<T>::get_bbox(objects[0]);
-            node->data = objects[0];
-            return node;
-        }
-        else {
-            auto* n = new node();
-
-            for (size_t i = 0; i < num_objects; ++i) {
-                n->bbox.extend(aabb_traits<T>::get_bbox(objects[i]));
-            }
-
-            glm::vec2 dim_sizes = n->bbox.max - n->bbox.min;
-            int longest_dim = dim_sizes.x > dim_sizes.y ? 0 : 1;
-
-            std::sort(objects, objects + num_objects,
-                [&longest_dim](const T& lhs, const T& rhs) 
-                {
-                    double lhs_dim = aabb_traits<T>::get_bbox(lhs).center()[longest_dim];
-                    double rhs_dim = aabb_traits<T>::get_bbox(rhs).center()[longest_dim];
-                    return lhs_dim < rhs_dim;
-                });
-
-            size_t lhs_size = num_objects / 2; // truncated
-            size_t rhs_size = num_objects - lhs_size;
-
-            // Divide objects into half along longest dimension
-            n->left = make_tree(objects, lhs_size);
-            n->right = make_tree(objects + lhs_size, rhs_size);
-            return n;
-        }
-    }
-
-    static void delete_tree(node* node)
-    {
-        if (!node) { return; }
-
-        delete_tree(node->left);
-        delete_tree(node->right);
-
-        if (!node->left && !node->right) {
-            delete (leafnode*)node;
-        } else {
-            delete node;
-        }
-    }
-
-private:
-    node* m_root;
-};
-
-
-bool building_assembler::get_part(const osmium::Way& way,
-    double ht_bottom, double ht_top, part& out_part)
-{
-    auto& nodes = way.nodes();
+    auto& nodes = info.way.nodes;
     if (nodes.empty() || !nodes.is_closed()) {
         return false;
     }
 
     bbox2d bbox;
-    std::vector<osmpoint> coords;
-    coords.resize(nodes.size() - 1);
+    std::vector<osmpoint> verts;
+    verts.resize(nodes.size() - 1);
 
     for (size_t i = 0; i < nodes.size() - 1; ++i)
     {
         auto proj = osmium::geom::MercatorProjection{}(nodes[i].location());
         bbox.extend(glm::dvec2(proj.x, proj.y));
-        coords[i] = proj;
+        verts[i] = proj;
     }
 
     out_part = {
-        .id = way.id(),
-        .orient = polygon_orient(coords),
+        .id = info.way.id,
+        .orient = polygon_orient(verts),
         .bbox = bbox,
-        .ht_btm = ht_bottom,
-        .ht_top = ht_top,
-        .coords = std::move(coords)
+        .ht_btm = info.ht_btm,
+        .ht_top = info.ht_top,
+        .verts = std::move(verts)
     };
     return true;
 }
 
-bool building_assembler::add_building(const osmium::Way& way,
-    const char* name, bool is_part, double ht_bottom, double ht_top)
+bool mesh_builder::add_building(const building_info& info)
 {
-    part part;
-    if (!get_part(way, ht_bottom, ht_top, part)) {
-        logERROR("Failed to get part for way %d", way.id());
+    building_part part;
+    if (!get_building_part(info, part)) {
+        logERROR("Failed to get part for way %lld", info.way.id);
         return false;
     }
 
-    if (is_part) {
-        m_parts.push_back(std::move(part));
+    if (info.is_part) {
+        m_building_parts.push_back(std::move(part));
     }
     else {
         m_buildings.push_back({
-            .name = name ? name : "",
             .info = std::move(part),
+            .name = info.way.name ? info.way.name : "",
             .parts = {},
         });
     }
+    return true;
+}
+
+bool mesh_builder::add_street(const street_info& info)
+{
+    std::vector<way_node> nodes;
+    for (const auto& nr : info.way.nodes)
+    {
+        auto proj = osmium::geom::MercatorProjection{}(nr.location());
+        nodes.push_back({ nr.ref(), proj });
+    }
+
+    m_streetways.push_back({
+        .id = info.way.id,
+        .name = info.way.name ? info.way.name : "",
+        .width = info.width,
+        .nodes = std::move(nodes)
+    });
+
     return true;
 }
 
@@ -442,28 +219,36 @@ struct drawdata_builder
 
     size_t num_verts() const { return m_data.verts.size() / 3; }
 
-    //void add_line(uint32_t idx0, uint32_t idx1) {
-    //    strip_indices.push_back(idx0);
-    //    strip_indices.push_back(idx1);
-    //    strip_indices.push_back(std::numeric_limits<uint32_t>::max()); // restart index
-    //}
+    void add_line(uint32_t idx0, uint32_t idx1) {
+        m_data.line_indices.push_back(idx0);
+        m_data.line_indices.push_back(idx1);
+        m_data.line_indices.push_back(std::numeric_limits<uint32_t>::max()); // restart index
+    }
 private:
     draw_data<TPt>& m_data;
 };
 
 
-template <typename TMesh, typename TVerts, typename TIndices>
-requires 
-    has_value_type<TVerts, osmpoint> && 
-    has_value_type<TIndices, uint32_t>
-uint32_t mesh_add_polygon(TMesh& mesh, const TVerts& verts, 
-    const TIndices& indices, double height, bool reverse_winding = false)
+template <typename TMesh>
+static uint32_t mesh_add_polygon(TMesh& mesh, 
+    std::span<const osmpoint> verts, 
+    std::span<const uint32_t> indices,
+    double height, 
+    bool reverse_vertices = false,
+    bool reverse_winding = false)
 {
     uint32_t vert_startidx = uint32_t(mesh.num_verts());
 
-    for (const auto& vert : verts) {
-        mesh.add_vertex(vert.x, vert.y, height);
+    if (reverse_vertices) {
+        for (const auto& vert : verts | std::views::reverse) {
+            mesh.add_vertex(vert.x, vert.y, height);
+        }
+    } else {
+        for (const auto& vert : verts) {
+            mesh.add_vertex(vert.x, vert.y, height);
+        }
     }
+
     for (size_t i = 0; i < indices.size(); i += 3)
     {
         uint32_t idx0 = indices[i] + vert_startidx;
@@ -479,77 +264,13 @@ uint32_t mesh_add_polygon(TMesh& mesh, const TVerts& verts,
     return vert_startidx;
 }
 
-// Earcut extension
-namespace mapbox {
-namespace util {
-
-template <>
-struct nth<0, osmpoint> {
-    inline static auto get(const osmpoint& t) {
-        return t.x;
-    };
-};
-template <>
-struct nth<1, osmpoint> {
-    inline static auto get(const osmpoint& t) {
-        return t.y;
-    };
-};
-}}
-
-// Presents a reversed view of a container without copying it.
-// Can't use std::views::reverse() because that doesn't have container typedefs.
-template <typename T>
-class reversed_view
+static void gen_building_part_mesh(auto& mesh, const mesh_builder::building_part& part)
 {
-public:
-    using value_type = typename T::value_type;
-    using reference = typename T::reference;
-    using const_reference = typename T::const_reference;
-    using iterator = typename T::reverse_iterator;
-    using const_iterator = typename T::const_reverse_iterator;
-    using difference_type = typename iterator::difference_type;
-    using size_type = typename T::size_type;
-
-    reversed_view(const T& data) : 
-        m_data(data) 
-    {}
-
-    size_type size() const { return m_data.size(); }
-
-    bool empty() const { return begin() == end(); }
-
-    const_iterator begin() const { return m_data.crbegin(); }
-    const_iterator end() const { return m_data.crend(); }
-
-    const_reference operator[](size_type pos) const { 
-        return m_data[m_data.size() - pos - 1];
-    }
-
-private:
-    const T& m_data;
-};
-
-static void gen_building_part_mesh(auto& mesh, const building_assembler::part& part)
-{
-    auto add_top_and_bottom =
-        [&](auto& mesh, const auto& poly) -> std::pair<uint32_t, uint32_t>
-        {
-            auto tri_indices = mapbox::earcut<uint32_t>(poly);
-            uint32_t bot_verts_idx = mesh_add_polygon(mesh, poly[0], tri_indices, part.ht_btm, true);
-            uint32_t top_verts_idx = mesh_add_polygon(mesh, poly[0], tri_indices, part.ht_top);
-            return { bot_verts_idx, top_verts_idx };
-        };
-
-    uint32_t bot_verts_idx, top_verts_idx;
-
-    if (part.orient == ORIENT_CCW) {
-        std::array<reversed_view<std::vector<osmpoint>>, 1> polygon = { { part.coords } };
-        std::tie(bot_verts_idx, top_verts_idx) = add_top_and_bottom(mesh, polygon);
-    } else {
-        std::array<std::span<const osmpoint>, 1> polygon = { { part.coords } };
-        std::tie(bot_verts_idx, top_verts_idx) = add_top_and_bottom(mesh, polygon);
-    }
+    bool reverse_verts = part.orient == ORIENT_CCW;
+    auto tri_indices = polygon_triangulate(part.verts, reverse_verts);
+    
+    uint32_t bot_verts_idx = mesh_add_polygon(mesh, part.verts, tri_indices, part.ht_btm, reverse_verts, true);
+    uint32_t top_verts_idx = mesh_add_polygon(mesh, part.verts, tri_indices, part.ht_top, reverse_verts);
 
     // print orientation of each face in the polygon
     //for (size_t i = 0; i < topbot_indices.size(); i += 3)
@@ -585,9 +306,9 @@ static void gen_building_part_mesh(auto& mesh, const building_assembler::part& p
     //add_polyline(coords, height, part.is_closed);
 
     // sides
-    for (uint32_t icur = 0; icur < part.coords.size(); ++icur)
+    for (uint32_t icur = 0; icur < part.verts.size(); ++icur)
     {
-        uint32_t inext = (icur + 1) % part.coords.size();
+        uint32_t inext = (icur + 1) % part.verts.size();
 
         uint32_t quad[4] = {
             bot_verts_idx + icur,
@@ -612,8 +333,6 @@ static void gen_building_part_mesh(auto& mesh, const building_assembler::part& p
         //mesh.add_segment(quad[1], quad[3]);
     }
 }
-
-
 
 template <typename Kernel>
 static draw_datad cgalmesh_draw_data(const cgalmesh<Kernel>& mesh, const std::string& name)
@@ -782,21 +501,21 @@ static bool cgalmesh_is_watertight(const cgalmesh<Kernel>& mesh, osmium::object_
 //    }
 //}
 
-std::vector<draw_datad> building_assembler::get_draw_data()
-{   
-    aabb_tree<building*> tree;
+bool mesh_builder::add_building_drawdata(std::vector<draw_datad>& drawdata)
+{
+     aabb_tree<building*> bldg_tree;
 
-    if (!m_parts.empty())
+    if (!m_building_parts.empty())
     {
         auto tree_ptrs = std::make_unique_for_overwrite<building*[]>(m_buildings.size());
         for (size_t i = 0; i < m_buildings.size(); ++i) {
             tree_ptrs[i] = &m_buildings[i];
         }
-        tree = aabb_tree<building*>::create_unsafe(tree_ptrs.get(), m_buildings.size());
+        bldg_tree = aabb_tree<building*>::create_unsafe(tree_ptrs.get(), m_buildings.size());
     }
 
-    std::vector<part*> unmapped_parts;
-    for (auto& part : m_parts)
+    std::vector<building_part*> unmapped_parts;
+    for (auto& part : m_building_parts)
     {
         if (part.orient == ORIENT_COLL) {
             logWARNING("Ignoring part %lld as it has 0 area", part.id);
@@ -804,7 +523,7 @@ std::vector<draw_datad> building_assembler::get_draw_data()
         }
 
         building* mapped_bldg = nullptr;
-        auto inter_bldgs = tree.intersect(part.bbox);
+        auto inter_bldgs = bldg_tree.intersect(part.bbox);
         if (inter_bldgs.empty()) 
         {
             logWARNING("Part %lld does not intersect any buildings", part.id);
@@ -813,7 +532,7 @@ std::vector<draw_datad> building_assembler::get_draw_data()
         }
         else {
             for (size_t icand = 0; icand < inter_bldgs.size() - 1; ++icand) {
-                if (polygon_covered_by(part.coords, inter_bldgs[icand]->info.coords)) {
+                if (polygon_covered_by(part.verts, inter_bldgs[icand]->info.verts)) {
                     mapped_bldg = inter_bldgs[icand];
                     break;
                 }
@@ -833,8 +552,6 @@ std::vector<draw_datad> building_assembler::get_draw_data()
         logWARNING("%zu building part(s) could not be " 
             "mapped to a building", unmapped_parts.size());
     }
-
-    std::vector<draw_datad> ret;
 
     // build meshes from the parts and union the parts
     for (auto& building : m_buildings)
@@ -865,7 +582,7 @@ std::vector<draw_datad> building_assembler::get_draw_data()
 
             for (size_t i = 0; i < building.parts.size(); ++i)
             {
-                part& part = *building.parts[i];
+                building_part& part = *building.parts[i];
                 logMESSAGE("   Joining part %d", part.id);
 
                 cgalmesh<Kernel> part_mesh;
@@ -893,7 +610,7 @@ std::vector<draw_datad> building_assembler::get_draw_data()
             dd = cgalmesh_draw_data<Kernel>(mesh, building.name);
         }
 
-        ret.push_back(std::move(dd));
+        drawdata.push_back(std::move(dd));
     }
 
     for (auto* part : unmapped_parts)
@@ -904,8 +621,292 @@ std::vector<draw_datad> building_assembler::get_draw_data()
         drawdata_builder builder(dd);
         gen_building_part_mesh(builder, *part);
 
-        ret.push_back(std::move(dd));
+        drawdata.push_back(std::move(dd));
     }
+
+    return true;
+}
+
+struct graph
+{
+#ifdef NDEBUG
+    template <typename ...Args> using set_t = boost::container::flat_set<Args...>;
+    template <typename ...Args> using map_t = boost::unordered::unordered_flat_map<Args...>;
+#else
+    // better VS debugging
+    template <typename ...Args> using set_t = std::set<Args...>;
+    template <typename ...Args> using map_t = std::unordered_map<Args...>;
+#endif
+
+    using edge_idpair = std::pair<osmium::object_id_type, osmium::object_id_type>;
+
+    struct edge
+    {
+        const mesh_builder::street_way* way;
+        bool visited;
+
+        //osmium::object_id_type other_id(osmium::object_id_type id) const {
+        //    assert(id == node_ids.first || id == node_ids.second);
+        //    return node_ids.first == id ? node_ids.second : node_ids.first;
+        //}
+    };
+
+    struct node
+    {
+        osmpoint vert;
+        // Edge duplication is possible if two ways share segments, so use a set.
+        // Two edges can also have the same way if a way loops back to 
+        // its starting node.
+        set_t<osmium::object_id_type> adj_node_ids;
+    };
+
+    // order-invariant
+    struct edge_idpair_hash
+    {
+        std::size_t operator()(const edge_idpair& s) const noexcept
+        {
+            std::size_t seed = 0;
+            auto minmax = std::minmax(s.first, s.second);
+            boost::hash_combine(seed, minmax.first);
+            boost::hash_combine(seed, minmax.second);
+            return seed;
+        }
+    };
+    // order-invariant
+    struct edge_idpair_equals
+    {
+        bool operator()(const edge_idpair& lhs, const edge_idpair& rhs) const noexcept {
+            return std::minmax(lhs.first, lhs.second) == std::minmax(rhs.first, rhs.second);
+        }
+    };
+
+    map_t<osmium::object_id_type, node> nodes;
+    map_t<edge_idpair, edge, edge_idpair_hash, edge_idpair_equals> edges;
+
+    using node_itr = decltype(nodes)::iterator;
+    using edge_itr = decltype(edges)::iterator;
+
+
+    node_itr get_or_add_node(osmium::object_id_type id, osmpoint vert)
+    {
+        auto nodeitr = nodes.find(id);
+        if (nodeitr == nodes.end())
+        {
+            graph::node node = { .vert = vert, .adj_node_ids = {} };
+            nodeitr = nodes.insert({ id, std::move(node) }).first;
+        }
+        return nodeitr;
+    }
+
+    void add_edge(node_itr nodeitr, 
+        osmium::object_id_type adj_node_id, 
+        const mesh_builder::street_way* way)
+    {
+        nodeitr->second.adj_node_ids.insert(adj_node_id);
+
+        edge_idpair idpair = { nodeitr->first, adj_node_id };
+        if (!edges.contains(idpair))
+        {
+            graph::edge e = { .way = way, .visited = false };
+            edges.insert({ idpair, std::move(e) });
+        }
+    }
+
+    using fat_polyline = std::pair<std::vector<osmium::object_id_type>, double>;
+
+    fat_polyline collect_polyline(node_itr nodeitr, osmium::object_id_type adj_nodeid, double eps = 1e-9)
+    {
+        std::vector<osmium::object_id_type> polyline;
+
+        auto cur_nodeid = nodeitr->first;
+        auto next_nodeid = adj_nodeid;
+        const mesh_builder::street_way* prev_edgeway = nullptr;
+
+        polyline.push_back(cur_nodeid);
+
+        while (true)
+        {
+            graph::node_itr next_nodeitr = nodes.find(next_nodeid);
+            if (next_nodeitr == nodes.end()) {
+                break; // out of map bounds
+            }
+
+            graph::edge_itr edgeitr = edges.find({ cur_nodeid, next_nodeid });
+            if (edgeitr == edges.end()) {
+                logERROR("Missing graph edge between nodes %lld and %lld", cur_nodeid, next_nodeid); // change this to an assert at some point
+                assert(false);
+            }
+            auto* cur_edgeway = edgeitr->second.way;
+
+            bool can_visit_edge = !edgeitr->second.visited &&
+                (!prev_edgeway || cur_edgeway == prev_edgeway ||
+                    std::abs(cur_edgeway->width - prev_edgeway->width) < eps);
+
+            if (!can_visit_edge) {
+                break;
+            }
+
+            polyline.push_back(next_nodeid);
+            edgeitr->second.visited = true;
+            prev_edgeway = cur_edgeway;
+
+            auto& next_node_adj_ids = next_nodeitr->second.adj_node_ids;
+            if (next_node_adj_ids.size() > 2) {
+                break; // stop at intersections
+            }
+
+            auto backup_cur_nodeid = cur_nodeid;
+            cur_nodeid = next_nodeid;
+
+            if (next_node_adj_ids.size() == 2) {
+                next_nodeid = *ranges::find_if(next_node_adj_ids, [&](auto id) { return id != backup_cur_nodeid; });
+            }
+            else if (next_node_adj_ids.size() == 1) {
+                next_nodeid = -1;
+            }
+            else {
+                logERROR("Adjacent node %lld has no adjacent nodes?", next_nodeid);
+                assert(false);
+            }
+        }
+
+        if (polyline.size() < 2) {
+            return { {}, 0 };
+        }
+        else {
+            assert(prev_edgeway);
+            return { std::move(polyline), prev_edgeway->width };
+        }
+    }
+};
+
+// instead of working with ids, maybe I dynamically allocate upfront
+// (i.e. convert all the node ids into node pointers)
+// all the nodes and edges and then point them to each other via pointers?
+// ok for cache coherency as well if all of them are put into a vector instead
+// of individually dynamically allocated? (eq. to a buffer allocator)
+// still need: given two node pointers, get the edge pointer corresponding to it
+
+// cant create upfront due to node duplication. just go with what I have for now
+
+bool mesh_builder::add_street_drawdata(std::vector<draw_datad>& drawdata)
+{
+    graph graph;
+
+    for (const auto& way : m_streetways)
+    {
+        for (size_t i = 0; i < way.nodes.size(); ++i)
+        {
+            auto* prev_waynode = (i == 0) ? nullptr : &way.nodes[i - 1];
+            auto* cur_waynode = &way.nodes[i];
+            auto* next_waynode = (i == way.nodes.size() - 1) ? nullptr : &way.nodes[i + 1];
+
+            auto nodeitr = graph.get_or_add_node(cur_waynode->id, cur_waynode->vert);
+
+            if (prev_waynode) { graph.add_edge(nodeitr, prev_waynode->id, &way); } // this is not needed if prevnode belongs to this way _exclusively_
+            if (next_waynode) { graph.add_edge(nodeitr, next_waynode->id, &way); }
+        }
+    }
+
+    // test
+    for (auto adjnodeid : graph.nodes[25768772].adj_node_ids)
+    {
+        auto way_id = graph.edges[{ 25768772, adjnodeid }].way->id;
+        logMESSAGE("node: %lld, way: %lld", adjnodeid, way_id);
+    }
+
+    constexpr double eps = 1e-9;
+
+    
+    std::vector<graph::fat_polyline> polylines;
+
+    for (auto nodeitr = graph.nodes.begin(); nodeitr != graph.nodes.end(); ++nodeitr)
+    {
+        //if (nodeitr->first == 25768772)
+        //{
+            std::vector<graph::fat_polyline> node_polylines;
+
+            for (auto adj_nodeid : nodeitr->second.adj_node_ids)
+            {
+                node_polylines.push_back(graph.collect_polyline(nodeitr, adj_nodeid, eps));
+            }
+
+            //logMESSAGE("node polylines size: %zu", node_polylines.size());
+            
+            draw_datad dd;
+            drawdata_builder builder(dd);
+
+            for (const auto& polyline : node_polylines)
+            {
+                if (polyline.first.size() == 0) {
+                    continue;
+                }
+
+                uint32_t vert_startidx = uint32_t(builder.num_verts());
+
+                for (auto id : polyline.first)
+                {
+                    auto pt = graph.nodes[id].vert;
+                    builder.add_vertex(pt.x, pt.y, 0);
+                }
+                
+                for (size_t i = 0; i < polyline.first.size() - 1; ++i)
+                {
+                    builder.add_line(i + vert_startidx, i + 1 + vert_startidx);
+                }
+            }
+
+            drawdata.push_back(std::move(dd));
+            //break;
+        //}
+
+        
+
+        //for (auto adj_nodeid : node.adj_node_ids)
+        //{
+        //    while (!edge->visited) {
+        //        
+        //    }
+        //}
+    }
+
+    // final: want to find all edges of same width that are joined together / adjacent, and not separated by intersections
+    // why not at intersections? Because they must be handled separately.
+    // so, I need two things: mark the intersections (so I know to stop at them), AND go both directions from a given node
+    // Cannot just go from intersection to intersection because that will ignore closed loops in the graph!! (think: racetracks, private streets etc.)
+    // intersections are simply those nodes that have more than two adjacent. That's it.
+    // Need to de-duplicate the edges!
+    // 
+    // Don't need to handle case of intersection with 2 adjacent but diff width/way, because they will not be collected
+    // anyway due to diff width. In fact if the width is the same, and 2 adjacent but diff streets, I WANT to collect it
+
+    // start from any node which has only 2 adjacent.
+    // Go in both directions collecting nodes as long as each has only 2 adjacent nodes
+    // and don't belong to a way with different width.
+    // Mark the edge to the adjacent node as visited.
+    // Once stopped, this constitutes a polyline segment that can be buffered and drawn.
+    // 
+    // node should be marked as visited when it has been visited from every adjacent node
+    // 
+    // inner nodes can be marked as visited immediately. intersection nodes should
+    // only be marked as visited when they have been visited from every adjacent node
+    // 
+    // What I really want is to mark graph edges as visited. If I have visited every edge,
+    // I know I have all the polylines necessary to draw the streets
+    // 
+
+
+
+    logMESSAGE("Wait here!");
+    return true;
+}
+
+std::vector<draw_datad> mesh_builder::get_draw_data()
+{   
+    std::vector<draw_datad> ret;
+
+    add_building_drawdata(ret);
+    add_street_drawdata(ret);
 
     return ret;
 }

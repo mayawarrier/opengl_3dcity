@@ -11,6 +11,8 @@ set(SOURCES
     "src/glutils.cpp"
     "src/viewport.hpp"
     "src/viewport.cpp"
+    "src/osm/geom.hpp"
+    "src/osm/geom.cpp"
     "src/osm/mesh.hpp"
     "src/osm/mesh.cpp"
     "src/osm/osm.hpp"
@@ -58,6 +60,9 @@ target_include_directories(3dcity PRIVATE ${EARCUT_HPP_INCLUDE_DIRS})
 
 find_package(Boost REQUIRED COMPONENTS geometry)
 target_link_libraries(3dcity PRIVATE Boost::geometry)
+
+find_package(Boost REQUIRED COMPONENTS container)
+target_link_libraries(3dcity PRIVATE Boost::container)
 
 find_package(CGAL CONFIG REQUIRED)
 target_link_libraries(3dcity PRIVATE CGAL::CGAL)
