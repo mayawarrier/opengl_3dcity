@@ -16,6 +16,16 @@
 #include <initializer_list>
 #include <SDL.h>
 
+namespace fs = std::filesystem;
+namespace tim = std::chrono;
+
+using clk = tim::steady_clock;
+using uint = unsigned int;
+
+struct size
+{
+    int width, height;
+};
 
 #define CONCAT(x, y) x##y
 #define STR(a) #a
@@ -36,9 +46,9 @@
         }                                                            \
         return *this;                                                \
     }                                                                \
-    bool ok() const noexcept { return handlename != handlenull; }    \
+    bool ok() const noexcept { return handlename != handlenull; }
 
-
+// Bogus warnings
 #ifdef __clang__
 #define PUSH_WARNINGS _Pragma("clang diagnostic push")
 #define POP_WARNINGS  _Pragma("clang diagnostic pop")
@@ -55,28 +65,6 @@
 #define IGNORE_WFORMAT_SECURITY
 #endif
 
-
-namespace fs = std::filesystem;
-namespace tim = std::chrono;
-
-using clk = tim::steady_clock;
-using uint = unsigned int;
-
-struct size
-{
-    int width, height;
-};
-
-using file_ptr = std::unique_ptr<std::FILE, int(*)(std::FILE*)>;
-
-#define SAFE_FOPENA(fname, mode) file_ptr(std::fopen(fname, mode), std::fclose)
-
-#if defined(_MSC_VER) || defined(__MINGW32__)
-#define SAFE_FOPEN(fname, mode) file_ptr(::_wfopen(fname, CONCAT(L, mode)), std::fclose)
-#else
-#define SAFE_FOPEN(fname, mode) SAFE_FOPENA(fname, mode)
-#endif
-
 // this only works if NDEBUG is defined in Release mode
 // (default for CMake)
 constexpr bool is_debug()
@@ -88,19 +76,43 @@ constexpr bool is_debug()
 #endif
 }
 
+using file_ptr = std::unique_ptr<std::FILE, int(*)(std::FILE*)>;
+
+#define SAFE_FOPENA(fname, mode) file_ptr(std::fopen(fname, mode), std::fclose)
+
+#if defined(_MSC_VER) || defined(__MINGW32__)
+#define SAFE_FOPEN(fname, mode) file_ptr(::_wfopen(fname, CONCAT(L, mode)), std::fclose)
+#else
+#define SAFE_FOPEN(fname, mode) SAFE_FOPENA(fname, mode)
+#endif
+
+// Protect a malloc'd pointer.
+using malloc_ptr = std::unique_ptr<void, void(*)(void*)>;
+inline malloc_ptr make_malloc_ptr(void* ptr) { return { ptr, std::free }; }
+
+
 bool log_init(const char* logfile);
 
 void logERROR(const char* fmt, ...);
 void logWARNING(const char* fmt, ...);
 void logMESSAGE(const char* fmt, ...);
 
+#ifdef NDEBUG
+#define assert_msg(cond, fmt, ...)
+#else
+void do_assert_msg(const char* expr, const char* file, int line, const char* fmt, ...);
+
+#define assert_msg(cond, fmt, ...)                                            \
+    do {                                                                      \
+        if (!(cond)) {                                                        \
+            do_assert_msg(XSTR(cond), __FILE__, __LINE__, fmt, __VA_ARGS__);  \
+        }                                                                     \
+    } while (0)
+#endif
+
+
 // Read file contents.
 bool read_file(const fs::path& path, std::unique_ptr<char[]>& filedata, size_t& filesize);
-
-using malloc_ptr_t = std::unique_ptr<void, void(*)(void*)>;
-
-// Protect a malloc'd pointer.
-inline malloc_ptr_t make_malloc_ptr(void* ptr) { return { ptr, std::free }; }
 
 
 // this has good codegen

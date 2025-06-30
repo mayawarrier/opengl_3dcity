@@ -1,6 +1,7 @@
 
 #include <cstdarg>
 #include <array>
+#include <debugbreak.h>
 
 #ifdef _WIN32
     #include "win32.hpp"
@@ -53,8 +54,8 @@ bool log_init(const char* logfile)
     return true;
 }
 
-static inline void do_log(std::FILE* stream, 
-    const char* prefix, const char* fmt, std::va_list vlist)
+static void log_to_stream(std::FILE* stream, const char* prefix, 
+    const char* fmt, std::va_list vlist, bool flush = false)
 {
 PUSH_WARNINGS
 IGNORE_WFORMAT_SECURITY
@@ -63,39 +64,55 @@ IGNORE_WFORMAT_SECURITY
     }
     std::vfprintf(stream, fmt, vlist);
     std::fputs("\n", stream);
+
+    if (flush) {
+        std::fflush(stream);
+    }
 POP_WARNINGS
+}
+
+static inline void log(std::FILE* stream,
+    const char* prefix, const char* prefix_color, 
+    const char* fmt, std::va_list vlist)
+{
+    log_to_stream(LOGFILE.get(), prefix, fmt, vlist, true);
+    log_to_stream(stream, LOG_COLOR_CONSOLE ? prefix_color : prefix, fmt, vlist);
 }
 
 #define GEN_LOG(stream, fmt, prefix, prefix_color)  \
 do {                                                \
     std::va_list vlist;                             \
-                                                    \
     va_start(vlist, fmt);                           \
-    do_log(LOGFILE.get(), prefix, fmt, vlist);      \
-    va_end(vlist);                                  \
-    std::fflush(LOGFILE.get());                     \
-                                                    \
-    va_start(vlist, fmt);                           \
-    do_log(stream, LOG_COLOR_CONSOLE ?              \
-        prefix_color : prefix, fmt, vlist);         \
+    log(stream, prefix, prefix_color, fmt, vlist);  \
     va_end(vlist);                                  \
 } while(0)
 
-void logERROR(const char* fmt, ...) 
-{
+
+void logERROR(const char* fmt, ...) {
     GEN_LOG(stderr, fmt, "Error: ", "\033[1;31mError:\033[0m ");
 }
 
-void logWARNING(const char* fmt, ...) 
-{
+void logWARNING(const char* fmt, ...) {
     GEN_LOG(stderr, fmt, "Warning: ", "\033[1;33mWarning:\033[0m ");
 }
 
-void logMESSAGE(const char* fmt, ...) 
-{
+void logMESSAGE(const char* fmt, ...) {
     GEN_LOG(stdout, fmt, nullptr, nullptr);
 }
 
+#ifndef NDEBUG
+void do_assert_msg(const char* expr, const char* file, int line, const char* fmt, ...) 
+{
+    auto print_assert = [](const char* fmt, ...) {
+        GEN_LOG(stderr, fmt, "Assert failed: ", "\033[1;31mAssert failed:\033[0m ");
+    };
+    print_assert("%s, %s (line %d)", expr, file, line);
+    // additional message
+    GEN_LOG(stderr, fmt, nullptr, nullptr);
+
+    debug_break();
+}
+#endif
 
 bool read_file(const fs::path& path, std::unique_ptr<char[]>& filedata, size_t& filesize)
 {

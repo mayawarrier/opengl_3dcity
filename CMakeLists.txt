@@ -101,3 +101,6 @@ target_include_directories(3dcity PRIVATE "third_party/stb/include")
 
 find_package(glm CONFIG REQUIRED)
 target_link_libraries(3dcity PRIVATE glm::glm-header-only)
+
+find_path(SCOTTT_DEBUGBREAK_INCLUDE_DIRS "debugbreak.h")
+target_include_directories(3dcity PRIVATE ${SCOTTT_DEBUGBREAK_INCLUDE_DIRS})

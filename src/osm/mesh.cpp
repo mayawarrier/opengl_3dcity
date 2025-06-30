@@ -2,7 +2,7 @@
 #include <algorithm>
 #include <span>
 #include <unordered_map>
-#include <ranges>
+#include <iterator>
 
 #include <osmium/osm/node_ref_list.hpp>
 #include <osmium/geom/coordinates.hpp>
@@ -20,8 +20,6 @@
 #include "../utils.hpp"
 #include "mesh.hpp"
 
-
-namespace ranges = std::ranges;
 
 namespace CGALPMP = CGAL::Polygon_mesh_processing;
 
@@ -240,7 +238,8 @@ static uint32_t mesh_add_polygon(TMesh& mesh,
     uint32_t vert_startidx = uint32_t(mesh.num_verts());
 
     if (reverse_vertices) {
-        for (const auto& vert : verts | std::views::reverse) {
+        for (size_t i = 0; i < verts.size(); ++i) {
+            const osmpoint& vert = verts[verts.size() - i - 1];
             mesh.add_vertex(vert.x, vert.y, height);
         }
     } else {
@@ -627,7 +626,7 @@ bool mesh_builder::add_building_drawdata(std::vector<draw_datad>& drawdata)
     return true;
 }
 
-struct graph
+struct street_graph
 {
 #ifdef NDEBUG
     template <typename ...Args> using set_t = boost::container::flat_set<Args...>;
@@ -638,19 +637,6 @@ struct graph
     template <typename ...Args> using map_t = std::unordered_map<Args...>;
 #endif
 
-    using edge_idpair = std::pair<osmium::object_id_type, osmium::object_id_type>;
-
-    struct edge
-    {
-        const mesh_builder::street_way* way;
-        bool visited;
-
-        //osmium::object_id_type other_id(osmium::object_id_type id) const {
-        //    assert(id == node_ids.first || id == node_ids.second);
-        //    return node_ids.first == id ? node_ids.second : node_ids.first;
-        //}
-    };
-
     struct node
     {
         osmpoint vert;
@@ -659,6 +645,14 @@ struct graph
         // its starting node.
         set_t<osmium::object_id_type> adj_node_ids;
     };
+
+    struct edge
+    {
+        const mesh_builder::street_way* way;
+        bool visited;
+    };
+
+    using edge_idpair = std::pair<osmium::object_id_type, osmium::object_id_type>;
 
     // order-invariant
     struct edge_idpair_hash
@@ -686,56 +680,54 @@ struct graph
     using node_itr = decltype(nodes)::iterator;
     using edge_itr = decltype(edges)::iterator;
 
-
     node_itr get_or_add_node(osmium::object_id_type id, osmpoint vert)
     {
         auto nodeitr = nodes.find(id);
         if (nodeitr == nodes.end())
         {
-            graph::node node = { .vert = vert, .adj_node_ids = {} };
+            node node = { .vert = vert, .adj_node_ids = {} };
             nodeitr = nodes.insert({ id, std::move(node) }).first;
         }
         return nodeitr;
     }
 
-    void add_edge(node_itr nodeitr, 
-        osmium::object_id_type adj_node_id, 
+    edge_itr add_edge(edge_idpair node_ids, 
         const mesh_builder::street_way* way)
     {
-        nodeitr->second.adj_node_ids.insert(adj_node_id);
+        assert(!edges.contains(node_ids));
 
-        edge_idpair idpair = { nodeitr->first, adj_node_id };
-        if (!edges.contains(idpair))
-        {
-            graph::edge e = { .way = way, .visited = false };
-            edges.insert({ idpair, std::move(e) });
-        }
+        edge e = { .way = way, .visited = false };
+        return edges.insert({ node_ids, std::move(e) }).first;
     }
 
-    using fat_polyline = std::pair<std::vector<osmium::object_id_type>, double>;
-
-    fat_polyline collect_polyline(node_itr nodeitr, osmium::object_id_type adj_nodeid, double eps = 1e-9)
+    struct thick_polyline
     {
-        std::vector<osmium::object_id_type> polyline;
+        std::vector<osmpoint> verts; 
+        double width;
+    };
+
+    bool collect_polyline(node_itr nodeitr, 
+        osmium::object_id_type adj_nodeid, thick_polyline& out_polyline, double eps = 1e-9)
+    {
+        std::vector<osmpoint> polyline;
 
         auto cur_nodeid = nodeitr->first;
         auto next_nodeid = adj_nodeid;
         const mesh_builder::street_way* prev_edgeway = nullptr;
 
-        polyline.push_back(cur_nodeid);
+        polyline.push_back(nodeitr->second.vert);
 
         while (true)
         {
-            graph::node_itr next_nodeitr = nodes.find(next_nodeid);
+            node_itr next_nodeitr = nodes.find(next_nodeid);
             if (next_nodeitr == nodes.end()) {
                 break; // out of map bounds
             }
 
-            graph::edge_itr edgeitr = edges.find({ cur_nodeid, next_nodeid });
-            if (edgeitr == edges.end()) {
-                logERROR("Missing graph edge between nodes %lld and %lld", cur_nodeid, next_nodeid); // change this to an assert at some point
-                assert(false);
-            }
+            edge_itr edgeitr = edges.find({ cur_nodeid, next_nodeid });
+            assert_msg(edgeitr != edges.end(), 
+                "Missing graph edge between nodes %lld and %lld", cur_nodeid, next_nodeid);
+
             auto* cur_edgeway = edgeitr->second.way;
 
             bool can_visit_edge = !edgeitr->second.visited &&
@@ -746,37 +738,35 @@ struct graph
                 break;
             }
 
-            polyline.push_back(next_nodeid);
+            polyline.push_back(next_nodeitr->second.vert);
+
             edgeitr->second.visited = true;
             prev_edgeway = cur_edgeway;
 
             auto& next_node_adj_ids = next_nodeitr->second.adj_node_ids;
+            assert_msg(next_node_adj_ids.size() != 0,
+                "Adjacent node %lld has no adjacent nodes?", next_nodeid);
+
             if (next_node_adj_ids.size() > 2) {
                 break; // stop at intersections
             }
 
-            auto backup_cur_nodeid = cur_nodeid;
-            cur_nodeid = next_nodeid;
-
+            osmium::object_id_type next_next_nodeid = -1;
             if (next_node_adj_ids.size() == 2) {
-                next_nodeid = *ranges::find_if(next_node_adj_ids, [&](auto id) { return id != backup_cur_nodeid; });
-            }
-            else if (next_node_adj_ids.size() == 1) {
-                next_nodeid = -1;
-            }
-            else {
-                logERROR("Adjacent node %lld has no adjacent nodes?", next_nodeid);
-                assert(false);
-            }
+                next_next_nodeid = *std::find_if(next_node_adj_ids.begin(), 
+                    next_node_adj_ids.end(), [&](auto id) { return id != cur_nodeid; });
+            } 
+
+            cur_nodeid = next_nodeid;
+            next_nodeid = next_next_nodeid;
         }
 
         if (polyline.size() < 2) {
-            return { {}, 0 };
-        }
-        else {
-            assert(prev_edgeway);
-            return { std::move(polyline), prev_edgeway->width };
-        }
+            return false;
+        }     
+        assert(prev_edgeway);
+        out_polyline = { .verts = std::move(polyline), .width = prev_edgeway->width };
+        return true;
     }
 };
 
@@ -791,7 +781,7 @@ struct graph
 
 bool mesh_builder::add_street_drawdata(std::vector<draw_datad>& drawdata)
 {
-    graph graph;
+    street_graph stgraph;
 
     for (const auto& way : m_streetways)
     {
@@ -801,73 +791,94 @@ bool mesh_builder::add_street_drawdata(std::vector<draw_datad>& drawdata)
             auto* cur_waynode = &way.nodes[i];
             auto* next_waynode = (i == way.nodes.size() - 1) ? nullptr : &way.nodes[i + 1];
 
-            auto nodeitr = graph.get_or_add_node(cur_waynode->id, cur_waynode->vert);
+            auto nodeitr = stgraph.get_or_add_node(cur_waynode->id, cur_waynode->vert);
 
-            if (prev_waynode) { graph.add_edge(nodeitr, prev_waynode->id, &way); } // this is not needed if prevnode belongs to this way _exclusively_
-            if (next_waynode) { graph.add_edge(nodeitr, next_waynode->id, &way); }
+            auto& adj_node_ids = nodeitr->second.adj_node_ids;
+            if (prev_waynode) {
+                adj_node_ids.insert(prev_waynode->id);
+            }
+            if (next_waynode) {
+                adj_node_ids.insert(next_waynode->id);
+                stgraph.add_edge({ nodeitr->first, next_waynode->id }, &way);
+            }
         }
     }
 
     // test
-    for (auto adjnodeid : graph.nodes[25768772].adj_node_ids)
+    for (auto adjnodeid : stgraph.nodes[25768772].adj_node_ids)
     {
-        auto way_id = graph.edges[{ 25768772, adjnodeid }].way->id;
+        auto way_id = stgraph.edges[{ 25768772, adjnodeid }].way->id;
         logMESSAGE("node: %lld, way: %lld", adjnodeid, way_id);
     }
 
     constexpr double eps = 1e-9;
 
-    
-    std::vector<graph::fat_polyline> polylines;
-
-    for (auto nodeitr = graph.nodes.begin(); nodeitr != graph.nodes.end(); ++nodeitr)
+    for (auto nodeitr = stgraph.nodes.begin(); nodeitr != stgraph.nodes.end(); ++nodeitr)
     {
-        //if (nodeitr->first == 25768772)
-        //{
-            std::vector<graph::fat_polyline> node_polylines;
+        using polyline = street_graph::thick_polyline;
+        std::vector<polyline> node_polylines;
 
-            for (auto adj_nodeid : nodeitr->second.adj_node_ids)
-            {
-                node_polylines.push_back(graph.collect_polyline(nodeitr, adj_nodeid, eps));
-            }
+        auto& adj_node_ids = nodeitr->second.adj_node_ids;
+        if (adj_node_ids.size() == 2) 
+        {
+            int index = 0;
+            bool collected[2] = { false, false };
+            polyline polylines[2];
 
-            //logMESSAGE("node polylines size: %zu", node_polylines.size());
+            for (auto adj_nodeid : adj_node_ids) {
+                collected[index] = stgraph.collect_polyline(nodeitr, adj_nodeid, polylines[index], eps);
+                index++;
+            }           
             
-            draw_datad dd;
-            drawdata_builder builder(dd);
-
-            for (const auto& polyline : node_polylines)
+            if (collected[0] && collected[1] &&
+                std::abs(polylines[0].width - polylines[1].width) < eps)
             {
-                if (polyline.first.size() == 0) {
-                    continue;
-                }
+                auto& poly0_verts = polylines[0].verts;
+                auto& poly1_verts = polylines[1].verts;
 
-                uint32_t vert_startidx = uint32_t(builder.num_verts());
+                // merge polylines into one
+                std::reverse(poly0_verts.begin(), poly0_verts.end());
+                poly0_verts.pop_back();
+                std::copy(poly1_verts.begin(), poly1_verts.end(), std::back_inserter(poly0_verts));
 
-                for (auto id : polyline.first)
-                {
-                    auto pt = graph.nodes[id].vert;
-                    builder.add_vertex(pt.x, pt.y, 0);
-                }
-                
-                for (size_t i = 0; i < polyline.first.size() - 1; ++i)
-                {
-                    builder.add_line(i + vert_startidx, i + 1 + vert_startidx);
+                node_polylines.push_back(std::move(polylines[0]));
+            }
+            else {
+                if (collected[0]) { node_polylines.push_back(std::move(polylines[0])); }
+                if (collected[1]) { node_polylines.push_back(std::move(polylines[1])); }
+            }
+        }
+        else {
+            for (auto adj_nodeid : adj_node_ids) {
+                polyline polyline;
+                if (stgraph.collect_polyline(nodeitr, adj_nodeid, polyline, eps)) {
+                    node_polylines.push_back(std::move(polyline));
                 }
             }
+        }
 
-            drawdata.push_back(std::move(dd));
-            //break;
-        //}
+        //logMESSAGE("node polylines size: %zu", node_polylines.size());
 
-        
+        draw_datad dd;
+        drawdata_builder builder(dd);
 
-        //for (auto adj_nodeid : node.adj_node_ids)
-        //{
-        //    while (!edge->visited) {
-        //        
-        //    }
-        //}
+        for (const auto& polyline : node_polylines)
+        {
+            if (polyline.verts.size() == 0) {
+                continue;
+            }
+
+            uint32_t vert_startidx = uint32_t(builder.num_verts());
+
+            for (const auto& vert : polyline.verts) {
+                builder.add_vertex(vert.x, vert.y, 0);
+            }
+            for (size_t i = 0; i < polyline.verts.size() - 1; ++i) {
+                builder.add_line(i + vert_startidx, i + 1 + vert_startidx);
+            }
+        }
+
+        drawdata.push_back(std::move(dd));
     }
 
     // final: want to find all edges of same width that are joined together / adjacent, and not separated by intersections

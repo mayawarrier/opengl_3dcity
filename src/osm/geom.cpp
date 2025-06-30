@@ -144,3 +144,7 @@ std::vector<uint32_t> polygon_triangulate(std::span<const osmpoint> verts, bool 
         return mapbox::earcut<uint32_t>(polygon);
     }
 }
+
+void polyline_triangulate(std::span<const osmpoint> polyline, double width)
+{
+}

@@ -38,6 +38,9 @@ orient polygon_orient(std::span<const osmpoint> poly);
 // \param reverse_orient Reverse orientation of input vertices.
 std::vector<uint32_t> polygon_triangulate(std::span<const osmpoint> poly, bool reverse_orient = false);
 
+// Triangulate a thick polyline.
+void polyline_triangulate(std::span<const osmpoint> polyline, double width);
+
 
 // Axis-aligned bounding box.
 struct bbox2d
