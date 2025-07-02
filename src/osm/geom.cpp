@@ -187,13 +187,40 @@ std::vector<uint32_t> polygon_triangulate(std::span<const glm::dvec2> verts, boo
     }
 }
 
-static void polyline_anchor(glm::dvec2 p0, glm::dvec2 p1, glm::dvec2 p2, double width, draw_datad& dd, double eps)
+static void segment_triangulate(glm::dvec2 p0, glm::dvec2 p1, double width, draw_datad& dd)
+{
+    glm::dvec2 norm = width * glm::normalize(vec_perp(p1 - p0));
+
+    uint32_t vert_startidx = uint32_t(dd.num_verts());
+    dd.add_vertex({ p0 - norm, 0.0 });
+    dd.add_vertex({ p0 + norm, 0.0 });
+    dd.add_vertex({ p1 + norm, 0.0 });
+    dd.add_vertex({ p1 - norm, 0.0 });
+
+    dd.add_triangle(0, 1, 3, vert_startidx);
+    dd.add_triangle(3, 1, 2, vert_startidx);
+}
+
+struct stitch_edge
+{
+    orient_t orient;
+    uint32_t inner_idx;
+    uint32_t outer_idx;
+
+    bool valid() const { 
+        return inner_idx != UINT32_MAX && outer_idx != UINT32_MAX; 
+    }
+};
+
+static stitch_edge corner_triangulate(glm::dvec2 p0, glm::dvec2 p1, glm::dvec2 p2, 
+    const stitch_edge& stitch_edge, double width, draw_datad& dd, double eps)
 {
     glm::dvec2 norm1 = width * glm::normalize(vec_perp(p1 - p0));
     glm::dvec2 norm2 = width * glm::normalize(vec_perp(p2 - p1));
 
     // point towards outward bend
-    if (orient(p0, p1, p2) == ORIENT_CCW) {
+    orient_t orient = ::orient(p0, p1, p2);
+    if (orient == ORIENT_CCW) {
         norm1 = -norm1;
         norm2 = -norm2;
     }
@@ -208,50 +235,60 @@ static void polyline_anchor(glm::dvec2 p0, glm::dvec2 p1, glm::dvec2 p2, double 
     glm::dvec2 norm_mid = inter_result.point - p1;
     glm::dvec2 inner_mid = p1 - norm_mid, outer_mid = inter_result.point;
 
-    uint32_t vert_startidx = uint32_t(dd.num_verts());
-    dd.add_vertex({ inner_p0, 0.0 });
-    dd.add_vertex({ outer_p0, 0.0 });
-    dd.add_vertex({ outer_p1_seg1, 0.0 });
-    dd.add_vertex({ inner_mid, 0.0 });
-    dd.add_vertex({ outer_mid, 0.0 });
-    dd.add_vertex({ outer_p1_seg2, 0.0 });
-    dd.add_vertex({ inner_p2, 0.0 });
-    dd.add_vertex({ outer_p2, 0.0 });
+    uint32_t inner_p0_idx, outer_p0_idx;
+    if (stitch_edge.valid()) 
+    {
+        inner_p0_idx = stitch_edge.inner_idx;
+        outer_p0_idx = stitch_edge.outer_idx;
+        if (stitch_edge.orient != orient) { std::swap(inner_p0_idx, outer_p0_idx); }
+    } 
+    else {
+        inner_p0_idx = dd.add_vertex({ inner_p0, 0.0 });
+        outer_p0_idx = dd.add_vertex({ outer_p0, 0.0 }); 
+    }
+    
+    uint32_t outer_p1_seg1_idx = dd.add_vertex({ outer_p1_seg1, 0.0 });
+    uint32_t inner_mid_idx     = dd.add_vertex({ inner_mid,     0.0 });
+    uint32_t outer_mid_idx     = dd.add_vertex({ outer_mid,     0.0 });
+    uint32_t outer_p1_seg2_idx = dd.add_vertex({ outer_p1_seg2, 0.0 });
+    uint32_t inner_p2_idx      = dd.add_vertex({ inner_p2,      0.0 });
+    uint32_t outer_p2_idx      = dd.add_vertex({ outer_p2,      0.0 });
 
-    dd.add_triangle(0, 1, 3, vert_startidx);
-    dd.add_triangle(1, 2, 3, vert_startidx);
-    dd.add_triangle(3, 2, 5, vert_startidx);
-    dd.add_triangle(2, 4, 5, vert_startidx); // remove for bevelled corners
-    dd.add_triangle(3, 7, 6, vert_startidx);
-    dd.add_triangle(3, 5, 7, vert_startidx);
+    bool remove_mid_tri = glm::degrees(angle_between(
+        outer_p1_seg2 - inner_mid, outer_p1_seg1 - inner_mid)) < 20.0;
 
-    //if (glm::degrees(angle_between(t0, t1)) < 30.0)
-    //{
-    //
-    //}
+    // Segment 1
+    dd.add_triangle(inner_p0_idx, outer_p0_idx, inner_mid_idx);
+    dd.add_triangle(outer_p0_idx, (remove_mid_tri ? outer_p1_seg2_idx : outer_p1_seg1_idx), inner_mid_idx);
+
+    if (!remove_mid_tri) {
+        dd.add_triangle(inner_mid_idx, outer_p1_seg1_idx, outer_p1_seg2_idx); 
+        dd.add_triangle(outer_p1_seg1_idx, outer_mid_idx, outer_p1_seg2_idx); // remove for bevelled corners
+    }
+    
+    // Segment 2
+    dd.add_triangle(inner_mid_idx, outer_p2_idx, inner_p2_idx);
+    dd.add_triangle(inner_mid_idx, outer_p1_seg2_idx, outer_p2_idx);
+
+    return { 
+        .orient = orient, 
+        .inner_idx = inner_p2_idx,
+        .outer_idx = outer_p2_idx };
 }
 
+// https://www.codeproject.com/Articles/226569/Drawing-polylines-by-tessellation
 void polyline_triangulate(std::span<const glm::dvec2> polyline, double width, draw_datad& dd, double eps)
 {
     if (polyline.size() < 2) {
         return;
     }
 
-    if (polyline.size() == 2) 
-    {
-        auto& p0 = polyline[0], &p1 = polyline[1];
-        glm::dvec2 norm = width * glm::normalize(vec_perp(p1 - p0));
-
-        uint32_t vert_startidx = uint32_t(dd.num_verts());
-        dd.add_vertex({ p0 - norm, 0.0 });
-        dd.add_vertex({ p0 + norm, 0.0 });
-        dd.add_vertex({ p1 + norm, 0.0 });
-        dd.add_vertex({ p1 - norm, 0.0 });
-
-        dd.add_triangle(0, 1, 3, vert_startidx);
-        dd.add_triangle(3, 1, 2, vert_startidx);
+    if (polyline.size() == 2) {
+        segment_triangulate(polyline[0], polyline[1], width, dd);
     }
     else {
+        stitch_edge stitch_edge{ .inner_idx = UINT32_MAX, .outer_idx = UINT32_MAX };
+
         for (size_t i = 1; i < polyline.size() - 1; ++i)
         {
             glm::dvec2 p0 = (i == 1) ? polyline[0] :
@@ -259,7 +296,7 @@ void polyline_triangulate(std::span<const glm::dvec2> polyline, double width, dr
             glm::dvec2 p2 = (i == polyline.size() - 2) ? polyline[i + 1] :
                 segment_mid({ polyline[i], polyline[i + 1] });
 
-            polyline_anchor(p0, polyline[i], p2, width, dd, eps);
+            stitch_edge = corner_triangulate(p0, polyline[i], p2, stitch_edge, width, dd, eps);
         }
     }
 }

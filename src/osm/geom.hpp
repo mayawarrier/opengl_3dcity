@@ -18,16 +18,18 @@ struct draw_data
     std::string name;
     std::vector<TVert> verts;
     std::vector<uint32_t> tri_indices; // GL_TRIANGLES
-    std::vector<uint32_t> line_indices; // GL_LINE_STRIP + prim restart index
 
-    void add_vertex(double x, double y, double z) {
+    uint32_t add_vertex(double x, double y, double z) 
+    {
+        uint32_t idx = num_verts();
         verts.push_back(x);
         verts.push_back(y);
         verts.push_back(z);
+        return idx;
     }
 
-    void add_vertex(glm::dvec3 vert) {
-        add_vertex(vert.x, vert.y, vert.z);
+    uint32_t add_vertex(glm::dvec3 vert) {
+        return add_vertex(vert.x, vert.y, vert.z);
     }
 
     void add_triangle(uint32_t idx0, uint32_t idx1, uint32_t idx2) {
@@ -40,13 +42,7 @@ struct draw_data
         add_triangle(idx0 + offset, idx1 + offset, idx2 + offset);
     }
 
-    size_t num_verts() const { return verts.size() / 3; }
-
-    void add_line(uint32_t idx0, uint32_t idx1) {
-        line_indices.push_back(idx0);
-        line_indices.push_back(idx1);
-        line_indices.push_back(std::numeric_limits<uint32_t>::max());
-    }
+    uint32_t num_verts() const { return uint32_t(verts.size() / 3); }
 };
 
 using draw_dataf = draw_data<float>;
@@ -56,6 +52,9 @@ using segment = std::pair<glm::dvec2, glm::dvec2>;
 
 // Get a vector perpendicular to the input i.e. cross(z, vec).
 inline glm::dvec2 vec_perp(glm::dvec2 vec) { return { -vec.y, vec.x }; }
+
+// Get the squared length of a vector.
+inline double vec_sqlength(glm::dvec2 vec) { return glm::dot(vec, vec); }
 
 // Get the midpoint of a segment.
 inline glm::dvec2 segment_mid(const segment& seg) {

@@ -64,14 +64,18 @@ public:
 
         if (highway_key && !str_equal(highway_key, "footway"))
         {
-            //add_polyline_from_nodes(nodes);
+            int lanes;
+            double width;
+            bool has_width = parse_num_if_exists(tags["width"], width);
+            bool has_lanes = parse_num_if_exists(tags["lanes"], lanes);
+
             m_mesh_builder.add_street({
                 .way = {
                     .id = way.id(),
                     .name = tags["name"],
                     .nodes = way.nodes(),
                 },
-                .width = 10
+                .width = has_width ? width : has_lanes ? lanes * 3.0 : 3.0
             });
         }
         else
@@ -144,11 +148,6 @@ public:
             for (const auto& tri_index : mesh.tri_indices) {
                 tri_indices.push_back(tri_index + verts_startidx);
             }
-            for (size_t i = 0; i < mesh.line_indices.size(); i += 3) {
-                line_indices.push_back(mesh.line_indices[i + 0] + verts_startidx);
-                line_indices.push_back(mesh.line_indices[i + 1] + verts_startidx);
-                line_indices.push_back(mesh.line_indices[i + 2]);
-            }
 
             //tri_indices.insert(tri_indices.end(), mesh.tri_indices.begin(), mesh.tri_indices.end());
         }
@@ -166,7 +165,6 @@ public:
         return {
             .verts = std::move(verts_float),
             .tri_indices = std::move(tri_indices),
-            .line_indices = std::move(line_indices)
         };
     }
 

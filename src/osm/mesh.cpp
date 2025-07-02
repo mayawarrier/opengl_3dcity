@@ -241,39 +241,6 @@ static void gen_building_part_mesh(auto& mesh, const mesh_builder::building_part
     uint32_t bot_verts_idx = mesh_add_polygon(mesh, part.verts, tri_indices, part.ht_btm, reverse_verts, true);
     uint32_t top_verts_idx = mesh_add_polygon(mesh, part.verts, tri_indices, part.ht_top, reverse_verts);
 
-    // print orientation of each face in the polygon
-    //for (size_t i = 0; i < topbot_indices.size(); i += 3)
-    //{
-    //
-    //    //int o = orient(part.coords[i], part.coords[(i + 1) % part.coords.size()], part.coords[(i + 2) % part.coords.size()]);
-    //    //std::cout << o << "\n";
-    //
-    //    double o = orient(part.coords[topbot_indices[i]],
-    //        part.coords[topbot_indices[(i + 1)]],
-    //        part.coords[topbot_indices[(i + 2)]]);
-    //    std::cout << o << "\n";
-    //
-    //    //size_t inext = (i + 1) % part.coords.size();
-    //    //glm::dvec2 v1(part.coords[i].x, part.coords[i].y);
-    //    //glm::dvec2 v2(part.coords[inext].x, part.coords[inext].y);
-    //    //glm::dvec2 edge = v2 - v1;
-    //    //glm::dvec2 normal(-edge.y, edge.x); // 90 degrees CCW rotation
-    //    //double orientation = glm::dot(normal, glm::dvec2(0.0, 1.0)); // Y-axis is up
-    //    //if (orientation > 0.0) {
-    //    //    std::cout << "Face " << i << " is CCW\n";
-    //    //} else if (orientation < 0.0) {
-    //    //    std::cout << "Face " << i << " is CW\n";
-    //    //} else {
-    //    //    std::cout << "Face " << i << " is degenerate (collinear)\n";
-    //    //}
-    //}
-
-    //boost::geometry::is_clo
-    //std::cout << "\n";
-    // bottom and top outlines
-    //add_polyline(coords, min_height, part.is_closed);
-    //add_polyline(coords, height, part.is_closed);
-
     // sides
     for (uint32_t icur = 0; icur < part.verts.size(); ++icur)
     {
@@ -310,7 +277,6 @@ static draw_datad cgalmesh_draw_data(const cgalmesh<Kernel>& mesh, const std::st
     ret.name = name;
     ret.verts.reserve(mesh.num_vertices() * 3);
     ret.tri_indices.reserve(mesh.num_faces() * 3);
-    ret.line_indices.reserve(mesh.num_edges() * 3);
 
     for (const auto& v : mesh.vertices()) 
     {
@@ -327,15 +293,6 @@ static draw_datad cgalmesh_draw_data(const cgalmesh<Kernel>& mesh, const std::st
             ret.tri_indices.push_back(mesh.target(h).id());
             h = mesh.next(h);
         } while (h != mesh.halfedge(f));
-    }
-
-    for (auto e : mesh.edges()) 
-    {
-        auto h = mesh.halfedge(e);
-        ret.line_indices.push_back(mesh.source(h).id());
-        ret.line_indices.push_back(mesh.target(h).id());
-        // opengl restart index
-        ret.line_indices.push_back(std::numeric_limits<uint32_t>::max()); 
     }
 
     return ret;
@@ -833,6 +790,9 @@ bool mesh_builder::add_street_drawdata(std::vector<draw_datad>& drawdata)
             if (polyline.verts.size() == 0) {
                 continue;
             }
+
+            // todo: when I was drawing all the ways before, it looked closer to what it actually is on google maps
+            // Maybe I need to assign width based on available space/nearby footpaths
 
             polyline_triangulate(polyline.verts, polyline.width, dd, eps);
 

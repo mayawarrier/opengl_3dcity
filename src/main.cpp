@@ -48,6 +48,8 @@ int main(int argc, char* argv[])
     glEnable(GL_PRIMITIVE_RESTART);
     glPrimitiveRestartIndex(std::numeric_limits<uint32_t>::max());
 
+    bool DRAW_WIREFRAME = true;
+
     osm_data osmdata;
     if (!read_osmfile("assets/maps/testmap.osm", osmdata)) {
         logERROR("Failed to read OSM map file");
@@ -85,12 +87,10 @@ int main(int argc, char* argv[])
     //    return -1;
     //}
 
-    
-    
     unsigned VBO_verts;
 
-    unsigned EBO_lines;
-    unsigned VAO_lines;
+    //unsigned EBO_lines;
+    //unsigned VAO_lines;
     //unsigned VBO_way;
 
     unsigned EBO_tris;
@@ -101,8 +101,8 @@ int main(int argc, char* argv[])
 
     glGenBuffers(1, &VBO_verts);
 
-    glGenVertexArrays(1, &VAO_lines);
-    glGenBuffers(1, &EBO_lines);
+    //glGenVertexArrays(1, &VAO_lines);
+    //glGenBuffers(1, &EBO_lines);
 
     glGenVertexArrays(1, &VAO_tris);
     glGenBuffers(1, &EBO_tris);
@@ -134,17 +134,17 @@ int main(int argc, char* argv[])
     glBindBuffer(GL_ARRAY_BUFFER, VBO_verts);
     glBufferData(GL_ARRAY_BUFFER, osmdata.verts.size() * sizeof(float), osmdata.verts.data(), GL_STATIC_DRAW);
 
-    glBindVertexArray(VAO_lines);
-    {
-        glBindBuffer(GL_ARRAY_BUFFER, VBO_verts);
-
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO_lines);
-        glBufferData(GL_ELEMENT_ARRAY_BUFFER, osmdata.line_indices.size() * sizeof(uint32_t), osmdata.line_indices.data(), GL_STATIC_DRAW);
-    
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
-        glEnableVertexAttribArray(0);
-    }
-    glBindVertexArray(0);
+    //glBindVertexArray(VAO_lines);
+    //{
+    //    glBindBuffer(GL_ARRAY_BUFFER, VBO_verts);
+    //
+    //    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO_lines);
+    //    glBufferData(GL_ELEMENT_ARRAY_BUFFER, osmdata.line_indices.size() * sizeof(uint32_t), osmdata.line_indices.data(), GL_STATIC_DRAW);
+    //
+    //    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+    //    glEnableVertexAttribArray(0);
+    //}
+    //glBindVertexArray(0);
 
 
     glBindVertexArray(VAO_tris);
@@ -230,22 +230,24 @@ int main(int argc, char* argv[])
         //}
         //glBindVertexArray(0);
 
-        
-        // Draw lines
-        glBindVertexArray(VAO_lines);
-        {
-            glUniform4f(color_loc, 0.0f, 0.0f, 0.0f, 1.0f); // black
-            glDrawElements(GL_LINE_STRIP, osmdata.line_indices.size(), GL_UNSIGNED_INT, 0);
-        }
-        glBindVertexArray(0);
-
         // Draw meshes
         glBindVertexArray(VAO_tris);
         {
             glUniform4f(color_loc, 0.5f, 0.5f, 0.5f, 1.0f); // gray
             glDrawElements(GL_TRIANGLES, osmdata.tri_indices.size(), GL_UNSIGNED_INT, 0);
+
+            if (DRAW_WIREFRAME)
+            {
+                glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+                glUniform4f(color_loc, 0, 0, 0, 1.0f);
+                glDrawElements(GL_TRIANGLES, osmdata.tri_indices.size(), GL_UNSIGNED_INT, 0);
+                glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+            }
         }
         glBindVertexArray(0);
+
+        //glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+
 
         wnd.update();
     }
