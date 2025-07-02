@@ -1,6 +1,6 @@
 
-#ifndef AABB_TREE_HPP
-#define AABB_TREE_HPP
+#ifndef MESH_HPP
+#define MESH_HPP
 
 #include <string>
 #include <vector>
@@ -9,18 +9,6 @@
 #include <osmium/fwd.hpp>
 
 #include "geom.hpp"
-
-template <typename TVert>
-struct draw_data
-{
-    std::string name;
-    std::vector<TVert> verts;
-    std::vector<uint32_t> tri_indices;
-    std::vector<uint32_t> line_indices;
-};
-
-using draw_dataf = draw_data<float>;
-using draw_datad = draw_data<double>;
 
 
 // Processes OSM data into a set of meshes/lines 
@@ -58,10 +46,10 @@ public:
     struct building_part
     {
         osmium::object_id_type id;
-        orient orient;
+        orient_t orient;
         bbox2d bbox;
         double ht_btm, ht_top;
-        std::vector<osmpoint> verts;
+        std::vector<glm::dvec2> verts;
     };
 
     struct building
@@ -74,7 +62,7 @@ public:
     struct way_node
     {
         osmium::object_id_type id;
-        osmpoint vert;
+        glm::dvec2 vert;
     };
 
     struct street_way

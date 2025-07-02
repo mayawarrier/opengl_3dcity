@@ -11,6 +11,7 @@ set(SOURCES
     "src/glutils.cpp"
     "src/viewport.hpp"
     "src/viewport.cpp"
+    "src/osm/aabb_tree.hpp"
     "src/osm/geom.hpp"
     "src/osm/geom.cpp"
     "src/osm/mesh.hpp"

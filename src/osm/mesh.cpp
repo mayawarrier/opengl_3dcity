@@ -18,8 +18,9 @@
 #include <CGAL/Polygon_mesh_processing/corefinement.h>
 
 #include "../utils.hpp"
-#include "mesh.hpp"
+#include "aabb_tree.hpp"
 
+#include "mesh.hpp"
 
 namespace CGALPMP = CGAL::Polygon_mesh_processing;
 
@@ -46,14 +47,15 @@ bool mesh_builder::get_building_part(const building_info& info, building_part& o
     }
 
     bbox2d bbox;
-    std::vector<osmpoint> verts;
+    std::vector<glm::dvec2> verts;
     verts.resize(nodes.size() - 1);
 
     for (size_t i = 0; i < nodes.size() - 1; ++i)
     {
         auto proj = osmium::geom::MercatorProjection{}(nodes[i].location());
-        bbox.extend(glm::dvec2(proj.x, proj.y));
-        verts[i] = proj;
+        auto proj_glm = glm::dvec2(proj.x, proj.y);
+        bbox.extend(proj_glm);
+        verts[i] = proj_glm;
     }
 
     out_part = {
@@ -94,7 +96,7 @@ bool mesh_builder::add_street(const street_info& info)
     for (const auto& nr : info.way.nodes)
     {
         auto proj = osmium::geom::MercatorProjection{}(nr.location());
-        nodes.push_back({ nr.ref(), proj });
+        nodes.push_back({ nr.ref(), glm::dvec2(proj.x, proj.y) });
     }
 
     m_streetways.push_back({
@@ -196,40 +198,8 @@ private:
     std::vector<typename cgalmesh<Kernel>::Vertex_index> m_vmap;
 };
 
-template <typename TPt>
-struct drawdata_builder
-{
-    drawdata_builder(draw_data<TPt>& data) : 
-        m_data(data) 
-    {}
-
-    void add_vertex(double x, double y, double z) {
-        m_data.verts.push_back(x);
-        m_data.verts.push_back(y);
-        m_data.verts.push_back(z);
-    }
-
-    void add_triangle(uint32_t idx0, uint32_t idx1, uint32_t idx2) {
-        m_data.tri_indices.push_back(idx0);
-        m_data.tri_indices.push_back(idx1);
-        m_data.tri_indices.push_back(idx2);
-    }
-
-    size_t num_verts() const { return m_data.verts.size() / 3; }
-
-    void add_line(uint32_t idx0, uint32_t idx1) {
-        m_data.line_indices.push_back(idx0);
-        m_data.line_indices.push_back(idx1);
-        m_data.line_indices.push_back(std::numeric_limits<uint32_t>::max()); // restart index
-    }
-private:
-    draw_data<TPt>& m_data;
-};
-
-
-template <typename TMesh>
-static uint32_t mesh_add_polygon(TMesh& mesh, 
-    std::span<const osmpoint> verts, 
+static uint32_t mesh_add_polygon(auto& mesh, 
+    std::span<const glm::dvec2> verts,
     std::span<const uint32_t> indices,
     double height, 
     bool reverse_vertices = false,
@@ -239,7 +209,7 @@ static uint32_t mesh_add_polygon(TMesh& mesh,
 
     if (reverse_vertices) {
         for (size_t i = 0; i < verts.size(); ++i) {
-            const osmpoint& vert = verts[verts.size() - i - 1];
+            const auto& vert = verts[verts.size() - i - 1];
             mesh.add_vertex(vert.x, vert.y, height);
         }
     } else {
@@ -566,8 +536,7 @@ bool mesh_builder::add_building_drawdata(std::vector<draw_datad>& drawdata)
         if (building.parts.empty()) 
         {
             dd.name = building.name;
-            drawdata_builder builder(dd);
-            gen_building_part_mesh(builder, building.info);
+            gen_building_part_mesh(dd, building.info);
         }
         else {
             // inexact kernel crashes with some meshes
@@ -616,9 +585,7 @@ bool mesh_builder::add_building_drawdata(std::vector<draw_datad>& drawdata)
     {
         draw_datad dd;
         dd.name = "part " + std::to_string(part->id);
-
-        drawdata_builder builder(dd);
-        gen_building_part_mesh(builder, *part);
+        gen_building_part_mesh(dd, *part);
 
         drawdata.push_back(std::move(dd));
     }
@@ -639,7 +606,7 @@ struct street_graph
 
     struct node
     {
-        osmpoint vert;
+        glm::dvec2 vert;
         // Edge duplication is possible if two ways share segments, so use a set.
         // Two edges can also have the same way if a way loops back to 
         // its starting node.
@@ -680,7 +647,7 @@ struct street_graph
     using node_itr = decltype(nodes)::iterator;
     using edge_itr = decltype(edges)::iterator;
 
-    node_itr get_or_add_node(osmium::object_id_type id, osmpoint vert)
+    node_itr get_or_add_node(osmium::object_id_type id, glm::dvec2 vert)
     {
         auto nodeitr = nodes.find(id);
         if (nodeitr == nodes.end())
@@ -702,14 +669,14 @@ struct street_graph
 
     struct thick_polyline
     {
-        std::vector<osmpoint> verts; 
+        std::vector<glm::dvec2> verts;
         double width;
     };
 
     bool collect_polyline(node_itr nodeitr, 
         osmium::object_id_type adj_nodeid, thick_polyline& out_polyline, double eps = 1e-9)
     {
-        std::vector<osmpoint> polyline;
+        std::vector<glm::dvec2> polyline;
 
         auto cur_nodeid = nodeitr->first;
         auto next_nodeid = adj_nodeid;
@@ -860,7 +827,6 @@ bool mesh_builder::add_street_drawdata(std::vector<draw_datad>& drawdata)
         //logMESSAGE("node polylines size: %zu", node_polylines.size());
 
         draw_datad dd;
-        drawdata_builder builder(dd);
 
         for (const auto& polyline : node_polylines)
         {
@@ -868,14 +834,18 @@ bool mesh_builder::add_street_drawdata(std::vector<draw_datad>& drawdata)
                 continue;
             }
 
-            uint32_t vert_startidx = uint32_t(builder.num_verts());
+            polyline_triangulate(polyline.verts, polyline.width, dd, eps);
 
-            for (const auto& vert : polyline.verts) {
-                builder.add_vertex(vert.x, vert.y, 0);
-            }
-            for (size_t i = 0; i < polyline.verts.size() - 1; ++i) {
-                builder.add_line(i + vert_startidx, i + 1 + vert_startidx);
-            }
+            //uint32_t vert_startidx = uint32_t(dd.num_verts());
+            //
+            //for (const auto& vert : polyline.verts) {
+            //    dd.add_vertex(vert.x, vert.y, 0);
+            //}
+            //for (size_t i = 0; i < polyline.verts.size() - 1; ++i) {
+            //    dd.add_line(i + vert_startidx, i + 1 + vert_startidx);
+            //}
+
+
         }
 
         drawdata.push_back(std::move(dd));

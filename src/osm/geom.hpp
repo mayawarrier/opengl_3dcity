@@ -8,38 +8,138 @@
 #include <span>
 
 #include <glm/glm.hpp>
-#include <osmium/geom/coordinates.hpp>
 
 #include "../utils.hpp"
 
 
-using osmpoint = osmium::geom::Coordinates;
-using osmsegment = std::pair<osmpoint, osmpoint>;
-
-// Polygon orientation
-enum orient
+template <typename TVert>
+struct draw_data
 {
-    ORIENT_CCW, // counter-clockwise
-    ORIENT_CW,  // clockwise
-    ORIENT_COLL // collinear
+    std::string name;
+    std::vector<TVert> verts;
+    std::vector<uint32_t> tri_indices; // GL_TRIANGLES
+    std::vector<uint32_t> line_indices; // GL_LINE_STRIP + prim restart index
+
+    void add_vertex(double x, double y, double z) {
+        verts.push_back(x);
+        verts.push_back(y);
+        verts.push_back(z);
+    }
+
+    void add_vertex(glm::dvec3 vert) {
+        add_vertex(vert.x, vert.y, vert.z);
+    }
+
+    void add_triangle(uint32_t idx0, uint32_t idx1, uint32_t idx2) {
+        tri_indices.push_back(idx0);
+        tri_indices.push_back(idx1);
+        tri_indices.push_back(idx2);
+    }
+
+    void add_triangle(uint32_t idx0, uint32_t idx1, uint32_t idx2, uint32_t offset) {
+        add_triangle(idx0 + offset, idx1 + offset, idx2 + offset);
+    }
+
+    size_t num_verts() const { return verts.size() / 3; }
+
+    void add_line(uint32_t idx0, uint32_t idx1) {
+        line_indices.push_back(idx0);
+        line_indices.push_back(idx1);
+        line_indices.push_back(std::numeric_limits<uint32_t>::max());
+    }
 };
 
-// Check for proper intersection of line segments (i.e. not parallel, and not at endpoints).
-bool segments_proper_intersect(const osmsegment& seg1, const osmsegment& seg2);
+using draw_dataf = draw_data<float>;
+using draw_datad = draw_data<double>;
 
-// Check if a polygon is within the bounds of another polygon (or on the border).
-bool polygon_covered_by(std::span<const osmpoint> inner_poly, std::span<const osmpoint> outer_poly);
+using segment = std::pair<glm::dvec2, glm::dvec2>;
+
+// Get a vector perpendicular to the input i.e. cross(z, vec).
+inline glm::dvec2 vec_perp(glm::dvec2 vec) { return { -vec.y, vec.x }; }
+
+// Get the midpoint of a segment.
+inline glm::dvec2 segment_mid(const segment& seg) {
+    return (seg.first + seg.second) / 2.0;
+}
+
+enum seg_inter_type
+{
+    INTER_PARALLEL,
+    INTER_COINCIDENT,
+    INTER_OUTSIDE_BOTH,
+    INTER_INSIDE_SEG1,
+    INTER_INSIDE_SEG2,
+    INTER_INSIDE_BOTH
+};
+
+struct seg_inter_result
+{
+    // If type is PARALLEL or COINCIDENT, 
+    // point and params are infinity
+    seg_inter_type type;
+    glm::dvec2 point;
+    // Parametric coordinates on each segment
+    double param_seg1;
+    double param_seg2;
+
+    seg_inter_result() = default;
+
+    explicit seg_inter_result(seg_inter_type type) :
+        type(type), 
+        point(std::numeric_limits<double>::infinity()),
+        param_seg1(std::numeric_limits<double>::infinity()),
+        param_seg2(std::numeric_limits<double>::infinity())
+    {}
+};
+
+// Intersect two line segments.
+bool segments_intersect(const segment& seg1, const segment& seg2, seg_inter_result &out_result, double eps = 1e-9);
+
+// Check for proper intersection of line segments 
+// (i.e. not parallel/coinciding, and not at endpoints).
+bool segments_proper_intersect(const segment& seg1, const segment& seg2, double eps = 1e-9);
+
+// Get angle between two vectors (in radians).
+double angle_between(glm::dvec2 a, glm::dvec2 b);
+
+enum orient_t
+{
+    ORIENT_CW = -1,  // clockwise
+    ORIENT_COLL = 0, // collinear
+    ORIENT_CCW = 1,  // counter-clockwise
+};
+
+inline orient_t classify_orient(double value)
+{
+    if (value > 0) {
+        return ORIENT_CCW;
+    } else if (value < 0) {
+        return ORIENT_CW;
+    } else {
+        return ORIENT_COLL;
+    }
+}
+
+// Get orientation of points wrt to each other.
+inline orient_t orient(glm::dvec2 a, glm::dvec2 b, glm::dvec2 c)
+{
+    glm::dvec2 v = b - a, w = c - a;
+    return classify_orient(v.x * w.y - v.y * w.x);
+}
 
 // Get orientation of polygon.
-orient polygon_orient(std::span<const osmpoint> poly);
+orient_t polygon_orient(std::span<const glm::dvec2> polygon);
+
+// Check if a polygon is within or on the border of another polygon.
+bool polygon_covered_by(std::span<const glm::dvec2> inner_polygon, std::span<const glm::dvec2> outer_polygon);
 
 // Triangulate polygon.
 // Input and output are clockwise oriented.
 // \param reverse_orient Reverse orientation of input vertices.
-std::vector<uint32_t> polygon_triangulate(std::span<const osmpoint> poly, bool reverse_orient = false);
+std::vector<uint32_t> polygon_triangulate(std::span<const glm::dvec2> polygon, bool reverse_orient = false);
 
 // Triangulate a thick polyline.
-void polyline_triangulate(std::span<const osmpoint> polyline, double width);
+void polyline_triangulate(std::span<const glm::dvec2> polyline, double width, draw_datad& dd, double eps = 1e-9);
 
 
 // Axis-aligned bounding box.
@@ -80,144 +180,6 @@ struct bbox2d
             this->max.x >= rhs.min.x &&
             this->max.y >= rhs.min.y;
     }
-};
-
-template <typename T>
-struct aabb_traits
-{
-    bbox2d b;
-    static const bbox2d& get_bbox(const T& obj) {
-        (void)obj;
-        return b;
-    }
-};
-
-// Axis-aligned bounding box tree.
-// Accelerates intersection queries.
-template <typename T>
-class aabb_tree
-{
-private:
-    struct node
-    {
-        node* left;
-        node* right;
-        bbox2d bbox;
-    };
-
-    struct leafnode : public node
-    {
-        T data;
-    };
-
-public:
-    aabb_tree() :
-        m_root(nullptr)
-    {}
-
-    // Changes the order of the source array!
-    static aabb_tree create_unsafe(T* objects, size_t num_objects) {
-        return { objects, num_objects };
-    }
-
-    MOVE_ONLY_CLASS(aabb_tree, m_root, nullptr)
-
-    std::vector<T> intersect(const bbox2d& bbox) const
-    {
-        std::vector<T> ret;
-        std::vector<node*> candidates;
-
-        auto insert_if_intersects = [&](node* node) {
-            if (node && node->bbox.intersects(bbox))
-                candidates.push_back(node);
-        };
-
-        insert_if_intersects(m_root);
-
-        while (!candidates.empty())
-        {
-            node* node = candidates.back();
-            candidates.pop_back();
-
-            // If it intersects, descend further down the tree
-            insert_if_intersects(node->left);
-            insert_if_intersects(node->right);
-
-            if (!node->left && !node->right) {
-                auto* leaf = (leafnode*)node;
-                ret.push_back(leaf->data);
-            }
-        }
-        return ret;
-    }
-
-    ~aabb_tree() {
-        delete_tree(m_root);
-    }
-
-private:
-    aabb_tree(T* objects, size_t num_objects) :
-        m_root(make_tree(objects, num_objects))
-    {}
-
-    static node* make_tree(T* objects, size_t num_objects)
-    {
-        if (num_objects == 0) {
-            return nullptr;
-        }
-        else if (num_objects == 1)
-        {
-            auto* node = new leafnode();
-            node->left = nullptr;
-            node->right = nullptr;
-            node->bbox = aabb_traits<T>::get_bbox(objects[0]);
-            node->data = objects[0];
-            return node;
-        }
-        else {
-            auto* n = new node();
-
-            for (size_t i = 0; i < num_objects; ++i) {
-                n->bbox.extend(aabb_traits<T>::get_bbox(objects[i]));
-            }
-
-            glm::vec2 dim_sizes = n->bbox.max - n->bbox.min;
-            int longest_dim = dim_sizes.x > dim_sizes.y ? 0 : 1;
-
-            std::sort(objects, objects + num_objects,
-                [&longest_dim](const T& lhs, const T& rhs) 
-                {
-                    double lhs_dim = aabb_traits<T>::get_bbox(lhs).center()[longest_dim];
-                    double rhs_dim = aabb_traits<T>::get_bbox(rhs).center()[longest_dim];
-                    return lhs_dim < rhs_dim;
-                });
-
-            size_t lhs_size = num_objects / 2; // truncated
-            size_t rhs_size = num_objects - lhs_size;
-
-            // Divide objects into half along longest dimension
-            n->left = make_tree(objects, lhs_size);
-            n->right = make_tree(objects + lhs_size, rhs_size);
-            return n;
-        }
-    }
-
-    static void delete_tree(node* node)
-    {
-        if (!node) { return; }
-
-        delete_tree(node->left);
-        delete_tree(node->right);
-
-        if (!node->left && !node->right) {
-            delete (leafnode*)node;
-        } else {
-            delete node;
-        }
-    }
-
-private:
-    node* m_root;
 };
 
 #endif
