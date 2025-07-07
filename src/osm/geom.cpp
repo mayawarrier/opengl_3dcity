@@ -197,8 +197,8 @@ static void segment_triangulate(glm::dvec2 p0, glm::dvec2 p1, double width, draw
     dd.add_vertex({ p1 + norm, 0.0 });
     dd.add_vertex({ p1 - norm, 0.0 });
 
-    dd.add_triangle(0, 1, 3, vert_startidx);
-    dd.add_triangle(3, 1, 2, vert_startidx);
+    dd.add_triangle_w_offset(0, 1, 3, vert_startidx);
+    dd.add_triangle_w_offset(3, 1, 2, vert_startidx);
 }
 
 struct stitch_edge
@@ -299,4 +299,31 @@ void polyline_triangulate(std::span<const glm::dvec2> polyline, double width, dr
             stitch_edge = corner_triangulate(p0, polyline[i], p2, stitch_edge, width, dd, eps);
         }
     }
+}
+
+bbox3d center_drawdata_batch(std::span<draw_datad> batch)
+{
+    bbox3d batch_bbox;
+    for (draw_datad& dd : batch) {
+        for (size_t i = 0; i < dd.verts.size(); i += 3) {
+            batch_bbox.extend({ 
+                dd.verts[i + 0], 
+                dd.verts[i + 1], 
+                dd.verts[i + 2] 
+            });
+        }
+    }
+    glm::dvec3 batch_center = batch_bbox.center();
+    for (draw_datad& dd : batch) {
+        for (size_t i = 0; i < dd.verts.size(); i += 3) {
+            dd.verts[i + 0] -= batch_center.x;
+            dd.verts[i + 1] -= batch_center.y;
+            dd.verts[i + 2] -= batch_center.z;
+        }
+    }
+
+    bbox3d ret;
+    ret.min = batch_bbox.min - batch_center;
+    ret.max = batch_bbox.max - batch_center;
+    return ret;
 }

@@ -3,15 +3,18 @@
 #define AABB_TREE_HPP
 
 #include "../utils.hpp"
-#include "geom.hpp"
+#include "common.hpp"
 
 template <typename T>
-struct aabb_traits
+struct aabb_tree_traits
 {
-    bbox2d b;
-    static const bbox2d& get_bbox(const T& obj) {
-        (void)obj;
-        return b;
+    bbox2d bb;
+    static const bbox2d& bbox(const T& obj) 
+    {
+        static_assert(deferred_false<T>::value, 
+            "aabb_tree_traits must be specialized for the type T.");
+        (void)obj; 
+        return bb;
     }
 };
 
@@ -21,17 +24,17 @@ template <typename T>
 class aabb_tree
 {
 private:
-    struct node
+    struct node 
     {
         node* left;
         node* right;
         bbox2d bbox;
     };
-
-    struct leafnode : public node
-    {
+    struct leafnode : public node {
         T data;
     };
+
+    using traits = aabb_tree_traits<T>;
 
 public:
     aabb_tree() :
@@ -93,7 +96,7 @@ private:
             auto* node = new leafnode();
             node->left = nullptr;
             node->right = nullptr;
-            node->bbox = aabb_traits<T>::get_bbox(objects[0]);
+            node->bbox = traits::bbox(objects[0]);
             node->data = objects[0];
             return node;
         }
@@ -101,7 +104,7 @@ private:
             auto* n = new node();
 
             for (size_t i = 0; i < num_objects; ++i) {
-                n->bbox.extend(aabb_traits<T>::get_bbox(objects[i]));
+                n->bbox.extend(traits::bbox(objects[i]));
             }
 
             glm::vec2 dim_sizes = n->bbox.max - n->bbox.min;
@@ -110,8 +113,8 @@ private:
             std::sort(objects, objects + num_objects,
                 [&longest_dim](const T& lhs, const T& rhs) 
                 {
-                    double lhs_dim = aabb_traits<T>::get_bbox(lhs).center()[longest_dim];
-                    double rhs_dim = aabb_traits<T>::get_bbox(rhs).center()[longest_dim];
+                    double lhs_dim = traits::bbox(lhs).center()[longest_dim];
+                    double rhs_dim = traits::bbox(rhs).center()[longest_dim];
                     return lhs_dim < rhs_dim;
                 });
 

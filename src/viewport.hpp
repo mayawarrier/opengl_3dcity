@@ -20,8 +20,8 @@ public:
         window(name, title, size, false)
     {}
 
-    window(const char* name, fullscreen_t) :
-        window(name, name, { 0, 0 }, true)
+    window(const char* name, const char* title, fullscreen_t) :
+        window(name, title, { 0, 0 }, true)
     {}
 
     ~window() noexcept { cleanup(); }

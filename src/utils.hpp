@@ -14,6 +14,8 @@
 #include <unordered_map>
 #include <optional>
 #include <initializer_list>
+#include <type_traits>
+
 #include <SDL.h>
 
 namespace fs = std::filesystem;
@@ -26,6 +28,10 @@ struct size
 {
     int width, height;
 };
+
+// Defer static_asserts until instantiation time
+template<typename>
+struct deferred_false : std::false_type {};
 
 #define CONCAT(x, y) x##y
 #define STR(a) #a

@@ -132,7 +132,7 @@ int main(int argc, char* argv[])
     //glBindVertexArray(0);
 
     glBindBuffer(GL_ARRAY_BUFFER, VBO_verts);
-    glBufferData(GL_ARRAY_BUFFER, osmdata.verts.size() * sizeof(float), osmdata.verts.data(), GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, osmdata.data.verts.size() * sizeof(float), osmdata.data.verts.data(), GL_STATIC_DRAW);
 
     //glBindVertexArray(VAO_lines);
     //{
@@ -152,7 +152,7 @@ int main(int argc, char* argv[])
         glBindBuffer(GL_ARRAY_BUFFER, VBO_verts);
 
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO_tris);
-        glBufferData(GL_ELEMENT_ARRAY_BUFFER, osmdata.tri_indices.size() * sizeof(uint32_t), osmdata.tri_indices.data(), GL_STATIC_DRAW);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, osmdata.data.tri_indices.size() * sizeof(uint32_t), osmdata.data.tri_indices.data(), GL_STATIC_DRAW);
 
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
         glEnableVertexAttribArray(0);
@@ -211,7 +211,7 @@ int main(int argc, char* argv[])
 
         camera.update();
 
-        glClearColor(1.f, 1.f, 1.f, 1.0f);
+        glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         
         shader.use();
@@ -233,15 +233,19 @@ int main(int argc, char* argv[])
         // Draw meshes
         glBindVertexArray(VAO_tris);
         {
-            glUniform4f(color_loc, 0.5f, 0.5f, 0.5f, 1.0f); // gray
-            glDrawElements(GL_TRIANGLES, osmdata.tri_indices.size(), GL_UNSIGNED_INT, 0);
-
-            if (DRAW_WIREFRAME)
+            for (const auto& colr_range: osmdata.color_ranges)
             {
-                glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-                glUniform4f(color_loc, 0, 0, 0, 1.0f);
-                glDrawElements(GL_TRIANGLES, osmdata.tri_indices.size(), GL_UNSIGNED_INT, 0);
-                glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+                glUniform4f(color_loc, colr_range.color.r, colr_range.color.g, colr_range.color.b, colr_range.color.a);
+
+                glDrawElements(GL_TRIANGLES, colr_range.count * 3, GL_UNSIGNED_INT, (void*)(colr_range.startidx * sizeof(uint32_t) * 3));
+
+                if (DRAW_WIREFRAME)
+                {
+                    glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+                    glUniform4f(color_loc, 0, 0, 0, 1.0f);
+                    glDrawElements(GL_TRIANGLES, colr_range.count * 3, GL_UNSIGNED_INT, (void*)(colr_range.startidx * sizeof(uint32_t) * 3));
+                    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+                }
             }
         }
         glBindVertexArray(0);

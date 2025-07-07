@@ -30,21 +30,6 @@ static bool parse_num_if_exists(const char* str, T& val)
     return str && parse_num(str, val);
 }
 
-// Every 3 values is a vertex.
-template <typename T>
-static glm::vec<3, T, glm::defaultp> avg_vert(const std::vector<T>& verts)
-{
-    glm::vec<3, T, glm::defaultp> avg(T(0));
-    for (size_t i = 0; i < verts.size(); i += 3) {
-        avg.x += verts[i];
-        avg.y += verts[i + 1];
-        avg.z += verts[i + 2];
-    }
-    avg /= (verts.size() / 3);
-    return avg;
-}
-
-
 class osm_datahandler : public osmium::handler::Handler
 {
 public:
@@ -60,10 +45,10 @@ public:
     {
         auto& tags = way.tags();
 
-        auto* highway_key = tags["highway"];
-
-        if (highway_key && !str_equal(highway_key, "footway"))
-        {
+        const char* highway = tags["highway"];
+        
+        if (highway && !str_equal(highway, "footway")) 
+        {    
             int lanes;
             double width;
             bool has_width = parse_num_if_exists(tags["width"], width);
@@ -76,6 +61,22 @@ public:
                     .nodes = way.nodes(),
                 },
                 .width = has_width ? width : has_lanes ? lanes * 3.0 : 3.0
+            });
+        }
+        else if (str_equal(highway, "footway") && !str_equal(tags["footway"], "crossing"))
+        {
+            //int lanes;
+            double width;
+            bool has_width = parse_num_if_exists(tags["width"], width);
+            //bool has_lanes = parse_num_if_exists(tags["lanes"], lanes);
+
+            m_mesh_builder.add_footpath({
+                .way = {
+                    .id = way.id(),
+                    .name = tags["name"],
+                    .nodes = way.nodes(),
+                },
+                .width = has_width ? width : 2.0
             });
         }
         else
@@ -128,44 +129,31 @@ public:
         //}
     }
 
-    osm_data to_osmdata()
+    osm_data to_draw_data()
     {
-        
-        auto meshes = m_mesh_builder.get_draw_data();
-        logMESSAGE("Num meshes %d", meshes.size());
+        auto batch = m_mesh_builder.get_draw_data();
 
-        // traverse all meshes and collect vertices and indices, center them
-        std::vector<float> verts;
-        std::vector<uint32_t> line_indices;
-        std::vector<uint32_t> tri_indices;
-
-        for (const auto& mesh : meshes) 
+        osm_data ret;
+        for (size_t i = 0; i < batch.size(); ++i) 
         {
-            size_t verts_startidx = verts.size() / 3;
-            verts.insert(verts.end(), mesh.verts.begin(), mesh.verts.end());
-            //m_line_indices.insert(m_line_indices.end(), mesh.line_indices.begin(), mesh.line_indices.end());
+            auto& dd = batch[i];
+            auto dd_float = std::move(dd).as_float();
 
-            for (const auto& tri_index : mesh.tri_indices) {
-                tri_indices.push_back(tri_index + verts_startidx);
+            uint32_t verts_startidx = ret.data.num_verts();
+            ret.data.verts.insert(ret.data.verts.end(), dd_float.verts.begin(), dd_float.verts.end());
+
+            uint32_t tri_startidx = ret.data.num_tris();
+            for (uint tri_index : dd_float.tri_indices) {
+                ret.data.tri_indices.push_back(tri_index + verts_startidx);
             }
 
-            //tri_indices.insert(tri_indices.end(), mesh.tri_indices.begin(), mesh.tri_indices.end());
+            ret.color_ranges.push_back({
+                tri_startidx,
+                dd_float.num_tris(),
+                dd_float.color
+            });
         }
-
-        auto center = avg_vert(verts);
-        
-        std::vector<float> verts_float;
-        verts_float.resize(verts.size());
-        
-        for (size_t i = 0; i < verts.size(); i += 3) {
-            verts_float[i + 0] = verts[i + 0] - center.x;
-            verts_float[i + 1] = verts[i + 1] - center.y;
-            verts_float[i + 2] = verts[i + 2] - center.z;
-        }
-        return {
-            .verts = std::move(verts_float),
-            .tri_indices = std::move(tri_indices),
-        };
+        return ret;
     }
 
 private:
@@ -207,7 +195,7 @@ bool read_osmfile(const fs::path& path, osm_data& out_data)
         );
         reader.close();
 
-        out_data = data_handler.to_osmdata();
+        out_data = data_handler.to_draw_data();
     }
     catch (const std::exception& e) {
         std::fprintf(stderr, "%s\n", e.what());

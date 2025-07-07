@@ -7,46 +7,8 @@
 #include <limits>
 #include <span>
 
-#include <glm/glm.hpp>
-
 #include "../utils.hpp"
-
-
-template <typename TVert>
-struct draw_data
-{
-    std::string name;
-    std::vector<TVert> verts;
-    std::vector<uint32_t> tri_indices; // GL_TRIANGLES
-
-    uint32_t add_vertex(double x, double y, double z) 
-    {
-        uint32_t idx = num_verts();
-        verts.push_back(x);
-        verts.push_back(y);
-        verts.push_back(z);
-        return idx;
-    }
-
-    uint32_t add_vertex(glm::dvec3 vert) {
-        return add_vertex(vert.x, vert.y, vert.z);
-    }
-
-    void add_triangle(uint32_t idx0, uint32_t idx1, uint32_t idx2) {
-        tri_indices.push_back(idx0);
-        tri_indices.push_back(idx1);
-        tri_indices.push_back(idx2);
-    }
-
-    void add_triangle(uint32_t idx0, uint32_t idx1, uint32_t idx2, uint32_t offset) {
-        add_triangle(idx0 + offset, idx1 + offset, idx2 + offset);
-    }
-
-    uint32_t num_verts() const { return uint32_t(verts.size() / 3); }
-};
-
-using draw_dataf = draw_data<float>;
-using draw_datad = draw_data<double>;
+#include "common.hpp"
 
 using segment = std::pair<glm::dvec2, glm::dvec2>;
 
@@ -140,45 +102,8 @@ std::vector<uint32_t> polygon_triangulate(std::span<const glm::dvec2> polygon, b
 // Triangulate a thick polyline.
 void polyline_triangulate(std::span<const glm::dvec2> polyline, double width, draw_datad& dd, double eps = 1e-9);
 
-
-// Axis-aligned bounding box.
-struct bbox2d
-{
-    glm::dvec2 min;
-    glm::dvec2 max;
-
-    bbox2d() :
-        min(std::numeric_limits<double>::infinity()),
-        max(-std::numeric_limits<double>::infinity())
-    {}
-
-    void extend(const bbox2d& other)
-    {
-        this->min = glm::min(this->min, other.min);
-        this->max = glm::max(this->max, other.max);
-    }
-
-    void extend(glm::dvec2 point)
-    {
-        this->min = glm::min(this->min, point);
-        this->max = glm::max(this->max, point);
-    }
-
-    glm::dvec2 center() const {
-        return (min + max) / 2.0;
-    }
-
-    bool intersects(const bbox2d& rhs) const
-    {
-        // Check if there is some overlap on the right 
-        // (i.e. min before other box's max) and some overlap 
-        // on the left (max after other box's min)
-        return
-            this->min.x <= rhs.max.x &&
-            this->min.y <= rhs.max.y &&
-            this->max.x >= rhs.min.x &&
-            this->max.y >= rhs.min.y;
-    }
-};
+// Center a batch of drawdata wrt to their global center.
+// Returns the bounding box of the centered data.
+bbox3d center_drawdata_batch(std::span<draw_datad> batch);
 
 #endif

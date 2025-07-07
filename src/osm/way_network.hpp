@@ -1,0 +1,180 @@
+#ifndef OSM_STREET_NET_HPP
+#define OSM_STREET_NET_HPP
+
+#ifdef NDEBUG
+#include <boost/unordered/unordered_flat_map.hpp>
+#include <boost/container/flat_set.hpp>
+#else
+#include <set>
+#include <unordered_map>
+#endif
+
+#include <boost/functional/hash.hpp>
+#include <glm/glm.hpp>
+#include <osmium/osm/types.hpp>
+
+#include "../utils.hpp"
+
+template <typename TWay>
+struct way_network_traits
+{
+    static double width(const TWay* way) 
+    {
+        static_assert(deferred_false<TWay>::value,
+            "way_network_traits must be specialized for the TWay type.");
+        return 0.0;
+    }
+};
+
+// A network/graph of OSM ways (for eg. streets, footpaths, etc.)
+template <typename TWay>
+struct way_network
+{
+#ifdef NDEBUG
+    template <typename ...Args> using set_t = boost::container::flat_set<Args...>;
+    template <typename ...Args> using map_t = boost::unordered::unordered_flat_map<Args...>;
+#else
+    // easier to debug with VS
+    template <typename ...Args> using set_t = std::set<Args...>;
+    template <typename ...Args> using map_t = std::unordered_map<Args...>;
+#endif
+
+    using traits = way_network_traits<TWay>;
+
+    struct node
+    {
+        glm::dvec2 vert;
+        // Edge duplication is possible if two ways share segments, so use a set.
+        // Two edges can also have the same way if a way loops back to 
+        // its starting node.
+        set_t<osmium::object_id_type> adj_node_ids;
+    };
+
+    struct edge
+    {
+        const TWay* way;
+        bool visited;
+    };
+
+    using edge_idpair = std::pair<osmium::object_id_type, osmium::object_id_type>;
+
+    // order-invariant
+    struct edge_idpair_hash
+    {
+        std::size_t operator()(const edge_idpair& s) const noexcept
+        {
+            std::size_t seed = 0;
+            auto minmax = std::minmax(s.first, s.second);
+            boost::hash_combine(seed, minmax.first);
+            boost::hash_combine(seed, minmax.second);
+            return seed;
+        }
+    };
+    // order-invariant
+    struct edge_idpair_equals
+    {
+        bool operator()(const edge_idpair& lhs, const edge_idpair& rhs) const noexcept {
+            return std::minmax(lhs.first, lhs.second) == std::minmax(rhs.first, rhs.second);
+        }
+    };
+
+    map_t<osmium::object_id_type, node> nodes;
+    map_t<edge_idpair, edge, edge_idpair_hash, edge_idpair_equals> edges;
+
+    using node_itr = decltype(nodes)::iterator;
+    using edge_itr = decltype(edges)::iterator;
+
+    node_itr get_or_add_node(osmium::object_id_type id, glm::dvec2 vert)
+    {
+        auto nodeitr = nodes.find(id);
+        if (nodeitr == nodes.end())
+        {
+            node node = { .vert = vert, .adj_node_ids = {} };
+            nodeitr = nodes.insert({ id, std::move(node) }).first;
+        }
+        return nodeitr;
+    }
+
+    edge_itr add_edge(edge_idpair node_ids, const TWay* way)
+    {
+        assert(!edges.contains(node_ids));
+
+        edge e = { .way = way, .visited = false };
+        return edges.insert({ node_ids, std::move(e) }).first;
+    }
+
+    struct thick_polyline
+    {
+        std::vector<glm::dvec2> verts;
+        double width;
+    };
+
+    bool collect_polyline(node_itr nodeitr, osmium::object_id_type adj_nodeid,
+        thick_polyline& out_polyline, double eps = 1e-9)
+    {
+        std::vector<glm::dvec2> polyline;
+
+        auto cur_nodeid = nodeitr->first;
+        auto next_nodeid = adj_nodeid;
+        const TWay* prev_edgeway = nullptr;
+
+        polyline.push_back(nodeitr->second.vert);
+
+        while (true)
+        {
+            node_itr next_nodeitr = nodes.find(next_nodeid);
+            if (next_nodeitr == nodes.end()) {
+                break; // out of map bounds
+            }
+
+            edge_itr edgeitr = edges.find({ cur_nodeid, next_nodeid });
+            assert_msg(edgeitr != edges.end(),
+                "Missing graph edge between nodes %lld and %lld", cur_nodeid, next_nodeid);
+
+            auto* cur_edgeway = edgeitr->second.way;
+
+            bool can_visit_edge = !edgeitr->second.visited &&
+                (!prev_edgeway || cur_edgeway == prev_edgeway ||
+                    std::abs(traits::width(cur_edgeway) - traits::width(prev_edgeway)) < eps);
+
+            if (!can_visit_edge) {
+                break;
+            }
+
+            polyline.push_back(next_nodeitr->second.vert);
+
+            edgeitr->second.visited = true;
+            prev_edgeway = cur_edgeway;
+
+            auto& next_node_adj_ids = next_nodeitr->second.adj_node_ids;
+            assert_msg(next_node_adj_ids.size() != 0,
+                "Adjacent node %lld has no adjacent nodes?", next_nodeid);
+
+            if (next_node_adj_ids.size() > 2) {
+                break; // stop at intersections
+            }
+
+            osmium::object_id_type next_next_nodeid = -1;
+            if (next_node_adj_ids.size() == 2) {
+                next_next_nodeid = *std::find_if(next_node_adj_ids.begin(),
+                    next_node_adj_ids.end(), [&](auto id) { return id != cur_nodeid; });
+            }
+
+            cur_nodeid = next_nodeid;
+            next_nodeid = next_next_nodeid;
+        }
+
+        if (polyline.size() < 2) {
+            return false;
+        }
+
+        assert(prev_edgeway);       
+        out_polyline = { 
+            .verts = std::move(polyline), 
+            .width = traits::width(prev_edgeway) 
+        };
+        return true;
+    }
+};
+
+#endif

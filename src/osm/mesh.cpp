@@ -8,10 +8,6 @@
 #include <osmium/geom/coordinates.hpp>
 #include <osmium/geom/mercator_projection.hpp>
 
-#include <boost/unordered/unordered_flat_map.hpp>
-#include <boost/container/flat_set.hpp>
-#include <boost/functional/hash.hpp>
-
 #include <CGAL/Exact_predicates_exact_constructions_kernel.h>
 #include <CGAL/Polygon_mesh_processing/repair.h>
 #include <CGAL/Surface_mesh.h>
@@ -19,6 +15,7 @@
 
 #include "../utils.hpp"
 #include "aabb_tree.hpp"
+#include "way_network.hpp"
 
 #include "mesh.hpp"
 
@@ -31,13 +28,7 @@ template <typename Kernel>
 using cgalpoint = typename Kernel::Point_3;
 
 
-template <>
-struct aabb_traits<mesh_builder::building*>
-{
-    static const bbox2d& get_bbox(mesh_builder::building* building) {
-        return building->info.bbox;
-    }
-};
+
 
 bool mesh_builder::get_building_part(const building_info& info, building_part& out_part)
 {
@@ -69,6 +60,22 @@ bool mesh_builder::get_building_part(const building_info& info, building_part& o
     return true;
 }
 
+mesh_builder::thick_way mesh_builder::get_thick_way(const way_info& way, double width)
+{
+    std::vector<way_node> nodes;
+    for (const auto& nr : way.nodes)
+    {
+        auto proj = osmium::geom::MercatorProjection{}(nr.location());
+        nodes.push_back({ nr.ref(), glm::dvec2(proj.x, proj.y) });
+    }
+    return {
+        .id = way.id,
+        .name = way.name ? way.name : "",
+        .width = width,
+        .nodes = std::move(nodes)
+    };
+}
+
 bool mesh_builder::add_building(const building_info& info)
 {
     building_part part;
@@ -92,20 +99,13 @@ bool mesh_builder::add_building(const building_info& info)
 
 bool mesh_builder::add_street(const street_info& info)
 {
-    std::vector<way_node> nodes;
-    for (const auto& nr : info.way.nodes)
-    {
-        auto proj = osmium::geom::MercatorProjection{}(nr.location());
-        nodes.push_back({ nr.ref(), glm::dvec2(proj.x, proj.y) });
-    }
+    m_streetways.push_back(get_thick_way(info.way, info.width));
+    return true;
+}
 
-    m_streetways.push_back({
-        .id = info.way.id,
-        .name = info.way.name ? info.way.name : "",
-        .width = info.width,
-        .nodes = std::move(nodes)
-    });
-
+bool mesh_builder::add_footpath(const footpath_info& info)
+{
+    m_footways.push_back(get_thick_way(info.way, info.width));
     return true;
 }
 
@@ -270,10 +270,13 @@ static void gen_building_part_mesh(auto& mesh, const mesh_builder::building_part
     }
 }
 
+static glm::vec4 building_color = glm::vec4(0.5f, 0.5f, 0.5f, 1.0f);
+
 template <typename Kernel>
 static draw_datad cgalmesh_draw_data(const cgalmesh<Kernel>& mesh, const std::string& name)
 {
     draw_datad ret;
+    ret.color = building_color;
     ret.name = name;
     ret.verts.reserve(mesh.num_vertices() * 3);
     ret.tri_indices.reserve(mesh.num_faces() * 3);
@@ -427,9 +430,19 @@ static bool cgalmesh_is_watertight(const cgalmesh<Kernel>& mesh, osmium::object_
 //    }
 //}
 
+
+
+template <>
+struct aabb_tree_traits<mesh_builder::building*>
+{
+    static const bbox2d& bbox(mesh_builder::building* building) {
+        return building->info.bbox;
+    }
+};
+
 bool mesh_builder::add_building_drawdata(std::vector<draw_datad>& drawdata)
 {
-     aabb_tree<building*> bldg_tree;
+    aabb_tree<building*> bldg_tree;
 
     if (!m_building_parts.empty())
     {
@@ -483,6 +496,7 @@ bool mesh_builder::add_building_drawdata(std::vector<draw_datad>& drawdata)
     for (auto& building : m_buildings)
     {
         draw_datad dd;
+        dd.color = building_color;
 
         if (building.name.empty()) {
             logMESSAGE("Adding building %lld", building.info.id);
@@ -541,6 +555,7 @@ bool mesh_builder::add_building_drawdata(std::vector<draw_datad>& drawdata)
     for (auto* part : unmapped_parts)
     {
         draw_datad dd;
+        dd.color = building_color;
         dd.name = "part " + std::to_string(part->id);
         gen_building_part_mesh(dd, *part);
 
@@ -549,150 +564,6 @@ bool mesh_builder::add_building_drawdata(std::vector<draw_datad>& drawdata)
 
     return true;
 }
-
-struct street_graph
-{
-#ifdef NDEBUG
-    template <typename ...Args> using set_t = boost::container::flat_set<Args...>;
-    template <typename ...Args> using map_t = boost::unordered::unordered_flat_map<Args...>;
-#else
-    // better VS debugging
-    template <typename ...Args> using set_t = std::set<Args...>;
-    template <typename ...Args> using map_t = std::unordered_map<Args...>;
-#endif
-
-    struct node
-    {
-        glm::dvec2 vert;
-        // Edge duplication is possible if two ways share segments, so use a set.
-        // Two edges can also have the same way if a way loops back to 
-        // its starting node.
-        set_t<osmium::object_id_type> adj_node_ids;
-    };
-
-    struct edge
-    {
-        const mesh_builder::street_way* way;
-        bool visited;
-    };
-
-    using edge_idpair = std::pair<osmium::object_id_type, osmium::object_id_type>;
-
-    // order-invariant
-    struct edge_idpair_hash
-    {
-        std::size_t operator()(const edge_idpair& s) const noexcept
-        {
-            std::size_t seed = 0;
-            auto minmax = std::minmax(s.first, s.second);
-            boost::hash_combine(seed, minmax.first);
-            boost::hash_combine(seed, minmax.second);
-            return seed;
-        }
-    };
-    // order-invariant
-    struct edge_idpair_equals
-    {
-        bool operator()(const edge_idpair& lhs, const edge_idpair& rhs) const noexcept {
-            return std::minmax(lhs.first, lhs.second) == std::minmax(rhs.first, rhs.second);
-        }
-    };
-
-    map_t<osmium::object_id_type, node> nodes;
-    map_t<edge_idpair, edge, edge_idpair_hash, edge_idpair_equals> edges;
-
-    using node_itr = decltype(nodes)::iterator;
-    using edge_itr = decltype(edges)::iterator;
-
-    node_itr get_or_add_node(osmium::object_id_type id, glm::dvec2 vert)
-    {
-        auto nodeitr = nodes.find(id);
-        if (nodeitr == nodes.end())
-        {
-            node node = { .vert = vert, .adj_node_ids = {} };
-            nodeitr = nodes.insert({ id, std::move(node) }).first;
-        }
-        return nodeitr;
-    }
-
-    edge_itr add_edge(edge_idpair node_ids, 
-        const mesh_builder::street_way* way)
-    {
-        assert(!edges.contains(node_ids));
-
-        edge e = { .way = way, .visited = false };
-        return edges.insert({ node_ids, std::move(e) }).first;
-    }
-
-    struct thick_polyline
-    {
-        std::vector<glm::dvec2> verts;
-        double width;
-    };
-
-    bool collect_polyline(node_itr nodeitr, 
-        osmium::object_id_type adj_nodeid, thick_polyline& out_polyline, double eps = 1e-9)
-    {
-        std::vector<glm::dvec2> polyline;
-
-        auto cur_nodeid = nodeitr->first;
-        auto next_nodeid = adj_nodeid;
-        const mesh_builder::street_way* prev_edgeway = nullptr;
-
-        polyline.push_back(nodeitr->second.vert);
-
-        while (true)
-        {
-            node_itr next_nodeitr = nodes.find(next_nodeid);
-            if (next_nodeitr == nodes.end()) {
-                break; // out of map bounds
-            }
-
-            edge_itr edgeitr = edges.find({ cur_nodeid, next_nodeid });
-            assert_msg(edgeitr != edges.end(), 
-                "Missing graph edge between nodes %lld and %lld", cur_nodeid, next_nodeid);
-
-            auto* cur_edgeway = edgeitr->second.way;
-
-            bool can_visit_edge = !edgeitr->second.visited &&
-                (!prev_edgeway || cur_edgeway == prev_edgeway ||
-                    std::abs(cur_edgeway->width - prev_edgeway->width) < eps);
-
-            if (!can_visit_edge) {
-                break;
-            }
-
-            polyline.push_back(next_nodeitr->second.vert);
-
-            edgeitr->second.visited = true;
-            prev_edgeway = cur_edgeway;
-
-            auto& next_node_adj_ids = next_nodeitr->second.adj_node_ids;
-            assert_msg(next_node_adj_ids.size() != 0,
-                "Adjacent node %lld has no adjacent nodes?", next_nodeid);
-
-            if (next_node_adj_ids.size() > 2) {
-                break; // stop at intersections
-            }
-
-            osmium::object_id_type next_next_nodeid = -1;
-            if (next_node_adj_ids.size() == 2) {
-                next_next_nodeid = *std::find_if(next_node_adj_ids.begin(), 
-                    next_node_adj_ids.end(), [&](auto id) { return id != cur_nodeid; });
-            } 
-
-            cur_nodeid = next_nodeid;
-            next_nodeid = next_next_nodeid;
-        }
-
-        if (polyline.size() < 2) {
-            return false;
-        }     
-        assert(prev_edgeway);
-        out_polyline = { .verts = std::move(polyline), .width = prev_edgeway->width };
-        return true;
-    }
-};
 
 // instead of working with ids, maybe I dynamically allocate upfront
 // (i.e. convert all the node ids into node pointers)
@@ -703,11 +574,20 @@ struct street_graph
 
 // cant create upfront due to node duplication. just go with what I have for now
 
-bool mesh_builder::add_street_drawdata(std::vector<draw_datad>& drawdata)
+template <>
+struct way_network_traits<mesh_builder::thick_way>
 {
-    street_graph stgraph;
+    static double width(const mesh_builder::thick_way* way) {
+        return way->width;
+    }
+};
 
-    for (const auto& way : m_streetways)
+bool mesh_builder::add_street_drawdata(std::vector<draw_datad>& drawdata, 
+    const std::vector<thick_way>& ways, const glm::vec4& color)
+{
+    way_network<mesh_builder::thick_way> network;
+
+    for (const auto& way : ways)
     {
         for (size_t i = 0; i < way.nodes.size(); ++i)
         {
@@ -715,7 +595,7 @@ bool mesh_builder::add_street_drawdata(std::vector<draw_datad>& drawdata)
             auto* cur_waynode = &way.nodes[i];
             auto* next_waynode = (i == way.nodes.size() - 1) ? nullptr : &way.nodes[i + 1];
 
-            auto nodeitr = stgraph.get_or_add_node(cur_waynode->id, cur_waynode->vert);
+            auto nodeitr = network.get_or_add_node(cur_waynode->id, cur_waynode->vert);
 
             auto& adj_node_ids = nodeitr->second.adj_node_ids;
             if (prev_waynode) {
@@ -723,23 +603,16 @@ bool mesh_builder::add_street_drawdata(std::vector<draw_datad>& drawdata)
             }
             if (next_waynode) {
                 adj_node_ids.insert(next_waynode->id);
-                stgraph.add_edge({ nodeitr->first, next_waynode->id }, &way);
+                network.add_edge({ nodeitr->first, next_waynode->id }, &way);
             }
         }
     }
 
-    // test
-    for (auto adjnodeid : stgraph.nodes[25768772].adj_node_ids)
-    {
-        auto way_id = stgraph.edges[{ 25768772, adjnodeid }].way->id;
-        logMESSAGE("node: %lld, way: %lld", adjnodeid, way_id);
-    }
-
     constexpr double eps = 1e-9;
 
-    for (auto nodeitr = stgraph.nodes.begin(); nodeitr != stgraph.nodes.end(); ++nodeitr)
+    for (auto nodeitr = network.nodes.begin(); nodeitr != network.nodes.end(); ++nodeitr)
     {
-        using polyline = street_graph::thick_polyline;
+        using polyline = decltype(network)::thick_polyline;
         std::vector<polyline> node_polylines;
 
         auto& adj_node_ids = nodeitr->second.adj_node_ids;
@@ -750,7 +623,7 @@ bool mesh_builder::add_street_drawdata(std::vector<draw_datad>& drawdata)
             polyline polylines[2];
 
             for (auto adj_nodeid : adj_node_ids) {
-                collected[index] = stgraph.collect_polyline(nodeitr, adj_nodeid, polylines[index], eps);
+                collected[index] = network.collect_polyline(nodeitr, adj_nodeid, polylines[index], eps);
                 index++;
             }           
             
@@ -775,7 +648,7 @@ bool mesh_builder::add_street_drawdata(std::vector<draw_datad>& drawdata)
         else {
             for (auto adj_nodeid : adj_node_ids) {
                 polyline polyline;
-                if (stgraph.collect_polyline(nodeitr, adj_nodeid, polyline, eps)) {
+                if (network.collect_polyline(nodeitr, adj_nodeid, polyline, eps)) {
                     node_polylines.push_back(std::move(polyline));
                 }
             }
@@ -784,6 +657,7 @@ bool mesh_builder::add_street_drawdata(std::vector<draw_datad>& drawdata)
         //logMESSAGE("node polylines size: %zu", node_polylines.size());
 
         draw_datad dd;
+        dd.color = color;
 
         for (const auto& polyline : node_polylines)
         {
@@ -793,6 +667,12 @@ bool mesh_builder::add_street_drawdata(std::vector<draw_datad>& drawdata)
 
             // todo: when I was drawing all the ways before, it looked closer to what it actually is on google maps
             // Maybe I need to assign width based on available space/nearby footpaths
+            // 
+            // Don't assign width, instead use the nearby footpaths to trace the outlines of the streets
+            // And draw the street texture within those outlines!
+            // Some streets may not have footpaths. In that case, I can use the current strat (drawing polylines),
+            // or use neighbouring buildings/relations to figure it out?
+            // 
 
             polyline_triangulate(polyline.verts, polyline.width, dd, eps);
 
@@ -807,8 +687,10 @@ bool mesh_builder::add_street_drawdata(std::vector<draw_datad>& drawdata)
 
 
         }
-
-        drawdata.push_back(std::move(dd));
+        if (dd.num_tris() != 0) {
+            drawdata.push_back(std::move(dd));
+        }
+        
     }
 
     // final: want to find all edges of same width that are joined together / adjacent, and not separated by intersections
@@ -836,18 +718,31 @@ bool mesh_builder::add_street_drawdata(std::vector<draw_datad>& drawdata)
     // I know I have all the polylines necessary to draw the streets
     // 
 
-
-
-    logMESSAGE("Wait here!");
     return true;
 }
 
 std::vector<draw_datad> mesh_builder::get_draw_data()
-{   
+{
     std::vector<draw_datad> ret;
-
     add_building_drawdata(ret);
-    add_street_drawdata(ret);
+    add_street_drawdata(ret, m_footways, { 0.3f, 0.3f, 0.3f, 1.0f });
+    add_street_drawdata(ret, m_streetways, { 0.7f, 0.7f, 0.7f, 1.0f });
+
+    bbox3d bbox = center_drawdata_batch(ret);
+
+    //// add ground plane
+    //draw_datad ground_dd;
+    //ground_dd.color = { 0.2f, 0.2f, 0.2f, 1.0f };
+    //ground_dd.name = "ground plane";
+    //ground_dd.verts = {
+    //    bbox.min.x, bbox.min.y, bbox.min.z - 0.1,
+    //    bbox.max.x, bbox.min.y, bbox.min.z - 0.1,
+    //    bbox.max.x, bbox.max.y, bbox.min.z - 0.1,
+    //    bbox.min.x, bbox.max.y, bbox.min.z - 0.1
+    //};
+    //ground_dd.tri_indices = { 0, 2, 1, 0, 3, 2 };
+    //
+    //ret.push_back(std::move(ground_dd));
 
     return ret;
 }
