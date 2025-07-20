@@ -8,14 +8,11 @@
 template <typename T>
 struct aabb_tree_traits
 {
+    static_assert(deferred_false<T>::value,
+        "aabb_tree_traits must be specialized for the type T.");
+
     bbox2d bb;
-    static const bbox2d& bbox(const T& obj) 
-    {
-        static_assert(deferred_false<T>::value, 
-            "aabb_tree_traits must be specialized for the type T.");
-        (void)obj; 
-        return bb;
-    }
+    static const bbox2d& bbox(const T& obj) { (void)obj; return bb; }
 };
 
 // Axis-aligned bounding box tree.

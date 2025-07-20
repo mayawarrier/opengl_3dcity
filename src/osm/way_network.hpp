@@ -1,5 +1,5 @@
-#ifndef OSM_STREET_NET_HPP
-#define OSM_STREET_NET_HPP
+#ifndef OSM_WAY_NETWORK_HPP
+#define OSM_WAY_NETWORK_HPP
 
 #ifdef NDEBUG
 #include <boost/unordered/unordered_flat_map.hpp>
@@ -18,11 +18,12 @@
 template <typename TWay>
 struct way_network_traits
 {
-    static double width(const TWay* way) 
-    {
-        static_assert(deferred_false<TWay>::value,
-            "way_network_traits must be specialized for the TWay type.");
-        return 0.0;
+    static_assert(deferred_false<TWay>::value,
+        "way_network_traits must be specialized for the TWay type.");
+
+    static bool similar_way(const TWay* lhs, const TWay* rhs, double eps) {
+        (void)lhs; (void)rhs; (void)eps;
+        return false; 
     }
 };
 
@@ -106,7 +107,7 @@ struct way_network
     struct thick_polyline
     {
         std::vector<glm::dvec2> verts;
-        double width;
+        const TWay* way;
     };
 
     bool collect_polyline(node_itr nodeitr, osmium::object_id_type adj_nodeid,
@@ -134,8 +135,8 @@ struct way_network
             auto* cur_edgeway = edgeitr->second.way;
 
             bool can_visit_edge = !edgeitr->second.visited &&
-                (!prev_edgeway || cur_edgeway == prev_edgeway ||
-                    std::abs(traits::width(cur_edgeway) - traits::width(prev_edgeway)) < eps);
+                (!prev_edgeway || cur_edgeway == prev_edgeway || 
+                    traits::similar_way(prev_edgeway, cur_edgeway, eps));
 
             if (!can_visit_edge) {
                 break;
@@ -171,7 +172,7 @@ struct way_network
         assert(prev_edgeway);       
         out_polyline = { 
             .verts = std::move(polyline), 
-            .width = traits::width(prev_edgeway) 
+            .way = prev_edgeway
         };
         return true;
     }

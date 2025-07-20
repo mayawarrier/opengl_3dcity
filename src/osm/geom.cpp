@@ -189,7 +189,7 @@ std::vector<uint32_t> polygon_triangulate(std::span<const glm::dvec2> verts, boo
 
 static void segment_triangulate(glm::dvec2 p0, glm::dvec2 p1, double width, draw_datad& dd)
 {
-    glm::dvec2 norm = width * glm::normalize(vec_perp(p1 - p0));
+    glm::dvec2 norm = (width / 2.0) * glm::normalize(vec_perp(p1 - p0));
 
     uint32_t vert_startidx = uint32_t(dd.num_verts());
     dd.add_vertex({ p0 - norm, 0.0 });
@@ -215,8 +215,8 @@ struct stitch_edge
 static stitch_edge corner_triangulate(glm::dvec2 p0, glm::dvec2 p1, glm::dvec2 p2, 
     const stitch_edge& stitch_edge, double width, draw_datad& dd, double eps)
 {
-    glm::dvec2 norm1 = width * glm::normalize(vec_perp(p1 - p0));
-    glm::dvec2 norm2 = width * glm::normalize(vec_perp(p2 - p1));
+    glm::dvec2 norm1 = (width / 2.0) * glm::normalize(vec_perp(p1 - p0));
+    glm::dvec2 norm2 = (width / 2.0) * glm::normalize(vec_perp(p2 - p1));
 
     // point towards outward bend
     orient_t orient = ::orient(p0, p1, p2);

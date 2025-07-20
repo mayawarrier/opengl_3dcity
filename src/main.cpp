@@ -51,7 +51,7 @@ int main(int argc, char* argv[])
     bool DRAW_WIREFRAME = true;
 
     osm_data osmdata;
-    if (!read_osmfile("assets/maps/testmap.osm", osmdata)) {
+    if (!read_osmfile("assets/maps/testmap_larger.osm", osmdata)) {
         logERROR("Failed to read OSM map file");
         return -1;
     }

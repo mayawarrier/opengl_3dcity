@@ -45,8 +45,13 @@ public:
     {
         auto& tags = way.tags();
 
+        mesh_builder::way_info wi{
+            .id = way.id(),
+            .name = tags["name"],
+            .nodes = way.nodes()
+        };
+
         const char* highway = tags["highway"];
-        
         if (highway && !str_equal(highway, "footway")) 
         {    
             int lanes;
@@ -54,29 +59,23 @@ public:
             bool has_width = parse_num_if_exists(tags["width"], width);
             bool has_lanes = parse_num_if_exists(tags["lanes"], lanes);
 
-            m_mesh_builder.add_street({
-                .way = {
-                    .id = way.id(),
-                    .name = tags["name"],
-                    .nodes = way.nodes(),
-                },
-                .width = has_width ? width : has_lanes ? lanes * 3.0 : 3.0
+            m_mesh_builder.add_highway({
+                .way = std::move(wi),
+                .type = HIGHWAY_TYPE_STREET,
+                .lanes = has_lanes ? lanes : -1,
+                .width = has_width ? width : has_lanes ? lanes * 3.5 : 3.5
             });
         }
         else if (str_equal(highway, "footway") && !str_equal(tags["footway"], "crossing"))
         {
-            //int lanes;
             double width;
             bool has_width = parse_num_if_exists(tags["width"], width);
-            //bool has_lanes = parse_num_if_exists(tags["lanes"], lanes);
 
-            m_mesh_builder.add_footpath({
-                .way = {
-                    .id = way.id(),
-                    .name = tags["name"],
-                    .nodes = way.nodes(),
-                },
-                .width = has_width ? width : 2.0
+            m_mesh_builder.add_highway({
+                .way = std::move(wi),
+                .type = HIGHWAY_TYPE_FOOTWAY,
+                .lanes = -1,
+                .width = has_width ? width : 1.0
             });
         }
         else
@@ -98,11 +97,7 @@ public:
                 double ht_btm = has_minheight ? min_height : (has_minlevel ? (3.0 * min_level) : 0.0);
 
                 m_mesh_builder.add_building({
-                    .way = {
-                        .id = way.id(),
-                        .name = tags["name"],                        
-                        .nodes = way.nodes(),
-                    },
+                    .way = std::move(wi),
                     .is_part = is_building_part,
                     .ht_btm = ht_btm,
                     .ht_top = ht_top

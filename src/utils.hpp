@@ -30,7 +30,7 @@ struct size
 };
 
 // Defer static_asserts until instantiation time
-template<typename>
+template<typename...>
 struct deferred_false : std::false_type {};
 
 #define CONCAT(x, y) x##y

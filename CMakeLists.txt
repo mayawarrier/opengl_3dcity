@@ -17,6 +17,8 @@ set(SOURCES
     "src/osm/geom.hpp"
     "src/osm/geom.cpp"
     "src/osm/mesh.hpp"
+    "src/osm/mesh_building.cpp"
+    "src/osm/mesh_street.cpp"
     "src/osm/mesh.cpp"
     "src/osm/osm.hpp"
     "src/osm/osm.cpp"
