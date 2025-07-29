@@ -325,26 +325,15 @@ static bool cgalmesh_is_watertight(const cgalmesh<Kernel>& mesh, osmium::object_
     return true;
 }
 
-template <>
-struct aabb_tree_traits<mesh_builder::building*>
-{
-    static const bbox2d& bbox(mesh_builder::building* building) {
-        return building->info.bbox;
-    }
-};
 
-bool mesh_builder::add_building_drawdata(std::vector<draw_datad>& drawdata)
-{
-    aabb_tree<building*> bldg_tree;
 
-    if (!m_building_parts.empty())
-    {
-        auto tree_ptrs = std::make_unique_for_overwrite<building * []>(m_buildings.size());
-        for (size_t i = 0; i < m_buildings.size(); ++i) {
-            tree_ptrs[i] = &m_buildings[i];
-        }
-        bldg_tree = aabb_tree<building*>::create_unsafe(tree_ptrs.get(), m_buildings.size());
+bool mesh_builder::gen_building_drawdata(std::vector<draw_datad>& drawdata, aabb_tree<building*>& bldg_tree)
+{
+    auto tree_ptrs = std::make_unique_for_overwrite<building*[]>(m_buildings.size());
+    for (size_t i = 0; i < m_buildings.size(); ++i) {
+        tree_ptrs[i] = &m_buildings[i];
     }
+    bldg_tree = aabb_tree<building*>::create_unsafe(tree_ptrs.get(), m_buildings.size());
 
     std::vector<building_part*> unmapped_parts;
     for (auto& part : m_building_parts)

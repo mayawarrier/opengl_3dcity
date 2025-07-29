@@ -61,7 +61,7 @@ public:
 
             m_mesh_builder.add_highway({
                 .way = std::move(wi),
-                .type = HIGHWAY_TYPE_STREET,
+                .type = WAY_TYPE_STREET,
                 .lanes = has_lanes ? lanes : -1,
                 .width = has_width ? width : has_lanes ? lanes * 3.5 : 3.5
             });
@@ -73,7 +73,7 @@ public:
 
             m_mesh_builder.add_highway({
                 .way = std::move(wi),
-                .type = HIGHWAY_TYPE_FOOTWAY,
+                .type = WAY_TYPE_FOOTWAY,
                 .lanes = -1,
                 .width = has_width ? width : 1.0
             });

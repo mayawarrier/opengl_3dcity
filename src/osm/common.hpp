@@ -108,4 +108,11 @@ struct draw_data
 using draw_dataf = draw_data<float>;
 using draw_datad = draw_data<double>;
 
+enum way_type
+{
+    WAY_TYPE_UNKNOWN,
+    WAY_TYPE_STREET,
+    WAY_TYPE_FOOTWAY
+};
+
 #endif

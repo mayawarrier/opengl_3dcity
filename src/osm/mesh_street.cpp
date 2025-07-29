@@ -92,21 +92,18 @@ bool mesh_builder::add_highway(const highway_info& info)
 // Fuck all the above.
 // This needs to be manually added by mapping outlines to collected polylines
 // If there is an entry in the supplemental file, it will be used to refine the mesh of the street
-// An entry consists of 2 nodes (from intersection to intersection
+// An entry consists of 2 nodes (from intersection to intersection)
 
 
 template <>
 struct way_network_traits<mesh_builder::thick_way>
 {
-    static bool similar_way(const mesh_builder::thick_way* lhs, 
-        const mesh_builder::thick_way* rhs, double eps) 
-    {
-        return lhs->type == rhs->type &&
-            std::abs(lhs->width - rhs->width) < eps;
+    static way_type way_type(const mesh_builder::thick_way* way) {
+        return way->type;
     }
 };
 
-bool mesh_builder::add_street_drawdata(std::vector<draw_datad>& drawdata)
+bool mesh_builder::gen_street_drawdata(std::vector<draw_datad>& drawdata, const aabb_tree<building*>& bldg_tree)
 {
     using network_traits = way_network_traits<mesh_builder::thick_way>;
     way_network<mesh_builder::thick_way> network;
@@ -136,7 +133,7 @@ bool mesh_builder::add_street_drawdata(std::vector<draw_datad>& drawdata)
 
     for (auto nodeitr = network.nodes.begin(); nodeitr != network.nodes.end(); ++nodeitr)
     {
-        using polyline = decltype(network)::thick_polyline;
+        using polyline = decltype(network)::path;
         std::vector<polyline> node_polylines;
 
         auto& adj_node_ids = nodeitr->second.adj_node_ids;
@@ -147,15 +144,14 @@ bool mesh_builder::add_street_drawdata(std::vector<draw_datad>& drawdata)
             polyline polylines[2];
 
             for (auto adj_nodeid : adj_node_ids) {
-                collected[index] = network.collect_polyline(nodeitr, adj_nodeid, polylines[index], eps);
+                collected[index] = network.path_to_intersection(nodeitr, adj_nodeid, polylines[index]);
                 index++;
             }           
             
-            if (collected[0] && collected[1] && 
-                network_traits::similar_way(polylines[0].way, polylines[1].way, eps))
+            if (collected[0] && collected[1] && polylines[0].type == polylines[1].type)
             {
-                auto& poly0_verts = polylines[0].verts;
-                auto& poly1_verts = polylines[1].verts;
+                auto& poly0_verts = polylines[0].nodes;
+                auto& poly1_verts = polylines[1].nodes;
 
                 // merge polylines into one
                 std::reverse(poly0_verts.begin(), poly0_verts.end());
@@ -172,7 +168,7 @@ bool mesh_builder::add_street_drawdata(std::vector<draw_datad>& drawdata)
         else {
             for (auto adj_nodeid : adj_node_ids) {
                 polyline polyline;
-                if (network.collect_polyline(nodeitr, adj_nodeid, polyline, eps)) {
+                if (network.path_to_intersection(nodeitr, adj_nodeid, polyline)) {
                     node_polylines.push_back(std::move(polyline));
                 }
             }
@@ -184,7 +180,7 @@ bool mesh_builder::add_street_drawdata(std::vector<draw_datad>& drawdata)
 
         for (const auto& polyline : node_polylines)
         {
-            if (polyline.verts.size() == 0) {
+            if (polyline.nodes.size() == 0) {
                 continue;
             }
 
@@ -198,10 +194,10 @@ bool mesh_builder::add_street_drawdata(std::vector<draw_datad>& drawdata)
             // 
 
             draw_datad dd;
-            dd.color = polyline.way->type == HIGHWAY_TYPE_FOOTWAY ?
+            dd.color = polyline.type == WAY_TYPE_FOOTWAY ?
                 glm::vec4(0.3f, 0.3f, 0.3f, 1.0f) : glm::vec4(0.7f, 0.7f, 0.7f, 1.0f);
 
-            polyline_triangulate(polyline.verts, polyline.way->width, dd, eps);
+            //polyline_triangulate(polyline.verts, polyline.way->width, dd, eps);
 
             //uint32_t vert_startidx = uint32_t(dd.num_verts());
             //
@@ -211,7 +207,7 @@ bool mesh_builder::add_street_drawdata(std::vector<draw_datad>& drawdata)
             //for (size_t i = 0; i < polyline.verts.size() - 1; ++i) {
             //    dd.add_line(i + vert_startidx, i + 1 + vert_startidx);
             //}
-            drawdata.push_back(std::move(dd));
+            //drawdata.push_back(std::move(dd));
 
         }
         

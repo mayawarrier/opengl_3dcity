@@ -14,6 +14,8 @@
 #include <osmium/osm/types.hpp>
 
 #include "../utils.hpp"
+#include "common.hpp"
+
 
 template <typename TWay>
 struct way_network_traits
@@ -21,13 +23,13 @@ struct way_network_traits
     static_assert(deferred_false<TWay>::value,
         "way_network_traits must be specialized for the TWay type.");
 
-    static bool similar_way(const TWay* lhs, const TWay* rhs, double eps) {
-        (void)lhs; (void)rhs; (void)eps;
-        return false; 
+    static way_type way_type(const TWay* way) {
+        (void)way;
+        return WAY_TYPE_UNKNOWN;
     }
 };
 
-// A network/graph of OSM ways (for eg. streets, footpaths, etc.)
+// A network/graph of OSM ways (streets, footpaths, etc.)
 template <typename TWay>
 struct way_network
 {
@@ -104,22 +106,38 @@ struct way_network
         return edges.insert({ node_ids, std::move(e) }).first;
     }
 
-    struct thick_polyline
+    struct path
     {
-        std::vector<glm::dvec2> verts;
-        const TWay* way;
+        struct node 
+        {
+            osmium::object_id_type id;
+            glm::dvec2 vert;
+            // way into this node from the previous node,
+            // null for the first node in the path
+            const TWay* in_way;
+        };
+        std::vector<node> nodes;
+        way_type type;
     };
 
-    bool collect_polyline(node_itr nodeitr, osmium::object_id_type adj_nodeid,
-        thick_polyline& out_polyline, double eps = 1e-9)
+    // Collect path to the nearest intersection.
+    // \param nodeitr - iterator to the starting node
+    // \param adj_nodeid - id of the adjacent node to start collecting from
+    bool path_to_intersection(node_itr start_nodeitr, osmium::object_id_type adj_nodeid, path& out_path)
     {
-        std::vector<glm::dvec2> polyline;
+        assert(start_nodeitr->second.adj_node_ids.contains(adj_nodeid));
 
-        auto cur_nodeid = nodeitr->first;
+        std::vector<path::node> path_nodes;
+
+        auto cur_nodeid = start_nodeitr->first;
         auto next_nodeid = adj_nodeid;
         const TWay* prev_edgeway = nullptr;
 
-        polyline.push_back(nodeitr->second.vert);
+        path_nodes.push_back({
+            .id = start_nodeitr->first,
+            .vert = start_nodeitr->second.vert,
+            .in_way = nullptr
+        });
 
         while (true)
         {
@@ -132,20 +150,34 @@ struct way_network
             assert_msg(edgeitr != edges.end(),
                 "Missing graph edge between nodes %lld and %lld", cur_nodeid, next_nodeid);
 
-            auto* cur_edgeway = edgeitr->second.way;
+            auto& cur_edge = edgeitr->second;
 
-            bool can_visit_edge = !edgeitr->second.visited &&
-                (!prev_edgeway || cur_edgeway == prev_edgeway || 
-                    traits::similar_way(prev_edgeway, cur_edgeway, eps));
+            bool can_visit_edge = false;
+            if (!cur_edge.visited) 
+            {
+                if (!prev_edgeway) {
+                    can_visit_edge = true;
+                }
+                else {
+                    way_type prev_type = traits::way_type(prev_edgeway);
+                    way_type cur_type = traits::way_type(cur_edge.way);
+                    assert(prev_type != WAY_TYPE_UNKNOWN && cur_type != WAY_TYPE_UNKNOWN);
 
+                    can_visit_edge = (prev_type == cur_type);
+                }
+            }
             if (!can_visit_edge) {
                 break;
             }
 
-            polyline.push_back(next_nodeitr->second.vert);
+            path_nodes.push_back({
+                .id = next_nodeitr->first,
+                .vert = next_nodeitr->second.vert,
+                .in_way = cur_edge.way
+            });
 
-            edgeitr->second.visited = true;
-            prev_edgeway = cur_edgeway;
+            cur_edge.visited = true;
+            prev_edgeway = cur_edge.way;
 
             auto& next_node_adj_ids = next_nodeitr->second.adj_node_ids;
             assert_msg(next_node_adj_ids.size() != 0,
@@ -165,14 +197,14 @@ struct way_network
             next_nodeid = next_next_nodeid;
         }
 
-        if (polyline.size() < 2) {
+        if (path_nodes.size() < 2) {
             return false;
         }
 
         assert(prev_edgeway);       
-        out_polyline = { 
-            .verts = std::move(polyline), 
-            .way = prev_edgeway
+        out_path = { 
+            .nodes = std::move(path_nodes), 
+            .type = traits::way_type(prev_edgeway)
         };
         return true;
     }
