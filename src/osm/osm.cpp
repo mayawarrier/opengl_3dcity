@@ -131,8 +131,7 @@ public:
         osm_data ret;
         for (size_t i = 0; i < batch.size(); ++i) 
         {
-            auto& dd = batch[i];
-            auto dd_float = std::move(dd).as_float();
+            auto dd_float = std::move(batch[i]).as_float();
 
             uint32_t verts_startidx = ret.data.num_verts();
             ret.data.verts.insert(ret.data.verts.end(), dd_float.verts.begin(), dd_float.verts.end());

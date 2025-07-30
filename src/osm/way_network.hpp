@@ -188,9 +188,12 @@ struct way_network
             }
 
             osmium::object_id_type next_next_nodeid = -1;
-            if (next_node_adj_ids.size() == 2) {
-                next_next_nodeid = *std::find_if(next_node_adj_ids.begin(),
-                    next_node_adj_ids.end(), [&](auto id) { return id != cur_nodeid; });
+            if (next_node_adj_ids.size() == 2) 
+            {
+                next_next_nodeid = *std::find_if(
+                    next_node_adj_ids.begin(),
+                    next_node_adj_ids.end(), 
+                    [&](auto id) { return id != cur_nodeid; });
             }
 
             cur_nodeid = next_nodeid;

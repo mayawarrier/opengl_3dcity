@@ -68,7 +68,7 @@ public:
         glm::dvec2 vert;
     };
 
-    struct thick_way
+    struct highway
     {
         osmium::object_id_type id;
         std::string name;
@@ -85,7 +85,7 @@ private:
 
     std::vector<building> m_buildings;
     std::vector<building_part> m_building_parts;
-    std::vector<thick_way> m_highways;
+    std::vector<highway> m_highways;
 };
 
 template <>

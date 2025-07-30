@@ -96,17 +96,101 @@ bool mesh_builder::add_highway(const highway_info& info)
 
 
 template <>
-struct way_network_traits<mesh_builder::thick_way>
+struct way_network_traits<mesh_builder::highway>
 {
-    static way_type way_type(const mesh_builder::thick_way* way) {
+    static way_type way_type(const mesh_builder::highway* way) {
         return way->type;
     }
 };
 
+using way_net = way_network<mesh_builder::highway>;
+
+static std::vector<way_net::path> get_all_paths_bw_intersections(way_net& network, way_net::node_itr start_node)
+{
+    std::vector<way_net::path> ret;
+
+    auto& adj_node_ids = start_node->second.adj_node_ids;
+    if (adj_node_ids.size() == 2)
+    {
+        int index = 0;
+        bool collected[2] = { false, false };
+        way_net::path paths[2];
+
+        for (auto adj_nodeid : adj_node_ids) {
+            collected[index] = network.path_to_intersection(start_node, adj_nodeid, paths[index]);
+            index++;
+        }
+
+        // start_node is in the middle of a path, merge both sides into one path
+        if (collected[0] && collected[1] && paths[0].type == paths[1].type)
+        {
+            auto& path0_nodes = paths[0].nodes;
+            auto& path1_nodes = paths[1].nodes;
+
+            std::reverse(path0_nodes.begin(), path0_nodes.end());
+
+            // reverse ways
+            for (size_t i = 1; i < path0_nodes.size(); ++i) {
+                path0_nodes[i].in_way = path0_nodes[i - 1].in_way;
+            }
+            path0_nodes[0].in_way = nullptr;
+            path1_nodes[0].in_way = path0_nodes.back().in_way;
+            path0_nodes.pop_back();
+
+            for (const auto& vert : path1_nodes) {
+                path0_nodes.push_back(vert);
+            }
+            ret.push_back(std::move(paths[0]));
+        }
+        else {
+            if (collected[0]) { ret.push_back(std::move(paths[0])); }
+            if (collected[1]) { ret.push_back(std::move(paths[1])); }
+        }
+    }
+    else {
+        for (auto adj_nodeid : adj_node_ids) {
+            way_net::path path;
+            if (network.path_to_intersection(start_node, adj_nodeid, path)) {
+                ret.push_back(std::move(path));
+            }
+        }
+    }
+
+    return ret;
+}
+
+static void gen_path_drawdata(draw_datad& dd, const way_net::path& path, double eps)
+{
+    // todo: when I was drawing all the ways before, it looked closer to what it actually is on google maps
+    // Maybe I need to assign width based on available space/nearby footpaths
+    // 
+    // Don't assign width, instead use the nearby footpaths to trace the outlines of the streets
+    // And draw the street texture within those outlines!
+    // Some streets may not have footpaths. In that case, I can use the current strat (drawing polylines),
+    // or use neighbouring buildings/relations to figure it out?
+    // 
+
+    std::vector<glm::dvec2> verts;
+    verts.reserve(path.nodes.size());
+    for (const auto& node : path.nodes) {
+        verts.push_back(node.vert);
+    }
+    polyline_triangulate(verts, path.nodes[1].in_way->width, dd, eps);
+
+    //uint32_t vert_startidx = uint32_t(dd.num_verts());
+    //
+    //for (const auto& vert : polyline.verts) {
+    //    dd.add_vertex(vert.x, vert.y, 0);
+    //}
+    //for (size_t i = 0; i < polyline.verts.size() - 1; ++i) {
+    //    dd.add_line(i + vert_startidx, i + 1 + vert_startidx);
+    //}
+}
+
+
 bool mesh_builder::gen_street_drawdata(std::vector<draw_datad>& drawdata, const aabb_tree<building*>& bldg_tree)
 {
-    using network_traits = way_network_traits<mesh_builder::thick_way>;
-    way_network<mesh_builder::thick_way> network;
+    way_net network;
 
     for (const auto& way : m_highways)
     {
@@ -131,87 +215,48 @@ bool mesh_builder::gen_street_drawdata(std::vector<draw_datad>& drawdata, const 
 
     constexpr double eps = 1e-9;
 
+    std::vector<way_net::path> footpaths;
+    std::vector<way_net::path> streets;
+
+    // traverse through all footpaths, shoot rays to nearby streets
+    // and mark those as streets as near
+    // 
+
+    // on cutting footpaths to match nearby streets:
+    // go through all footpaths above. Each footpath can be cut into multiple footpath pieces
+    // The cut is made when the distance or and angular tolerance to nearby street is broken
+    // or more precisely, when the matched street segment changes
+    // This allows cutting footpaths to match their corresponding street segments
+
     for (auto nodeitr = network.nodes.begin(); nodeitr != network.nodes.end(); ++nodeitr)
     {
-        using polyline = decltype(network)::path;
-        std::vector<polyline> node_polylines;
-
-        auto& adj_node_ids = nodeitr->second.adj_node_ids;
-        if (adj_node_ids.size() == 2) 
+        for (auto&& path : get_all_paths_bw_intersections(network, nodeitr))
         {
-            int index = 0;
-            bool collected[2] = { false, false };
-            polyline polylines[2];
-
-            for (auto adj_nodeid : adj_node_ids) {
-                collected[index] = network.path_to_intersection(nodeitr, adj_nodeid, polylines[index]);
-                index++;
-            }           
-            
-            if (collected[0] && collected[1] && polylines[0].type == polylines[1].type)
-            {
-                auto& poly0_verts = polylines[0].nodes;
-                auto& poly1_verts = polylines[1].nodes;
-
-                // merge polylines into one
-                std::reverse(poly0_verts.begin(), poly0_verts.end());
-                poly0_verts.pop_back();
-                std::copy(poly1_verts.begin(), poly1_verts.end(), std::back_inserter(poly0_verts));
-
-                node_polylines.push_back(std::move(polylines[0]));
-            }
-            else {
-                if (collected[0]) { node_polylines.push_back(std::move(polylines[0])); }
-                if (collected[1]) { node_polylines.push_back(std::move(polylines[1])); }
+            if (path.type == WAY_TYPE_FOOTWAY) {
+                footpaths.push_back(std::move(path));
+            } else {
+                streets.push_back(std::move(path));
             }
         }
-        else {
-            for (auto adj_nodeid : adj_node_ids) {
-                polyline polyline;
-                if (network.path_to_intersection(nodeitr, adj_nodeid, polyline)) {
-                    node_polylines.push_back(std::move(polyline));
-                }
-            }
-        }
-
+        
         //logMESSAGE("node polylines size: %zu", node_polylines.size());
 
-        
+        draw_datad footpath_dd;
+        footpath_dd.color = glm::vec4(0.3f, 0.3f, 0.3f, 1.0f);
 
-        for (const auto& polyline : node_polylines)
-        {
-            if (polyline.nodes.size() == 0) {
-                continue;
-            }
-
-            // todo: when I was drawing all the ways before, it looked closer to what it actually is on google maps
-            // Maybe I need to assign width based on available space/nearby footpaths
-            // 
-            // Don't assign width, instead use the nearby footpaths to trace the outlines of the streets
-            // And draw the street texture within those outlines!
-            // Some streets may not have footpaths. In that case, I can use the current strat (drawing polylines),
-            // or use neighbouring buildings/relations to figure it out?
-            // 
-
-            draw_datad dd;
-            dd.color = polyline.type == WAY_TYPE_FOOTWAY ?
-                glm::vec4(0.3f, 0.3f, 0.3f, 1.0f) : glm::vec4(0.7f, 0.7f, 0.7f, 1.0f);
-
-            //polyline_triangulate(polyline.verts, polyline.way->width, dd, eps);
-
-            //uint32_t vert_startidx = uint32_t(dd.num_verts());
-            //
-            //for (const auto& vert : polyline.verts) {
-            //    dd.add_vertex(vert.x, vert.y, 0);
-            //}
-            //for (size_t i = 0; i < polyline.verts.size() - 1; ++i) {
-            //    dd.add_line(i + vert_startidx, i + 1 + vert_startidx);
-            //}
-            //drawdata.push_back(std::move(dd));
-
+        for (const auto& path : footpaths) {
+            gen_path_drawdata(footpath_dd, path, eps);
         }
-        
-        
+
+        draw_datad street_dd;
+        street_dd.color = glm::vec4(0.7f, 0.7f, 0.7f, 1.0f);
+
+        for (const auto& street : streets) {
+            gen_path_drawdata(street_dd, street, eps);
+        } 
+
+        drawdata.push_back(std::move(footpath_dd));
+        drawdata.push_back(std::move(street_dd));
     }
 
 
