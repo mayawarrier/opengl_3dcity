@@ -10,13 +10,13 @@ static inline seg_inter_type classify_seg_inter_type(double param1, double param
     bool out2 = param2 < 0 || param2 > 1;
 
     if (out1 && out2) { 
-        return INTER_OUTSIDE_BOTH; 
+        return SEG_INTER_OUTSIDE_BOTH; 
     } else if (out1) { 
-        return INTER_INSIDE_SEG2; 
+        return SEG_INTER_INSIDE_SEG2; 
     } else if (out2) { 
-        return INTER_INSIDE_SEG1; 
+        return SEG_INTER_INSIDE_SEG1; 
     } else { 
-        return INTER_INSIDE_BOTH; 
+        return SEG_INTER_INSIDE_BOTH; 
     }
 }
 
@@ -34,10 +34,10 @@ bool segments_intersect(const segment& seg1, const segment& seg2, seg_inter_resu
     {
         if (std::abs(numer_t) < eps && std::abs(numer_u) < eps) {
             // proof: equate slope and y-intercept
-            out_result = seg_inter_result(INTER_COINCIDENT);
+            out_result = seg_inter_result(SEG_INTER_COINCIDENT);
             return true;
         } else {
-            out_result = seg_inter_result(INTER_PARALLEL);
+            out_result = seg_inter_result(SEG_INTER_PARALLEL);
             return false;
         }
     }
@@ -49,7 +49,7 @@ bool segments_intersect(const segment& seg1, const segment& seg2, seg_inter_resu
     out_result.param_seg2 = u;
     out_result.type = classify_seg_inter_type(t, u);
     
-    return out_result.type == INTER_INSIDE_BOTH;
+    return out_result.type == SEG_INTER_INSIDE_BOTH;
 }
 
 bool segments_proper_intersect(const segment& seg1, const segment& seg2, double eps)
@@ -57,7 +57,7 @@ bool segments_proper_intersect(const segment& seg1, const segment& seg2, double 
     seg_inter_result result;
     segments_intersect(seg1, seg2, result, eps);
 
-    if (result.type == INTER_PARALLEL || result.type == INTER_COINCIDENT) {
+    if (result.type == SEG_INTER_PARALLEL || result.type == SEG_INTER_COINCIDENT) {
         return false;
     }
     double t = result.param_seg1;
@@ -110,6 +110,12 @@ double angle_between(glm::dvec2 a, glm::dvec2 b)
 {
     double cos_theta = glm::dot(a, b) / (glm::length(a) * glm::length(b));
     return std::acos(std::clamp(cos_theta, -1.0, 1.0));
+}
+
+double min_angle_between(glm::dvec2 a, glm::dvec2 b)
+{
+    double angle = angle_between(a, b);
+    return std::min(angle, glm::two_pi<double>() - angle);
 }
 
 // https://en.wikipedia.org/wiki/Shoelace_formula
@@ -273,7 +279,8 @@ static stitch_edge corner_triangulate(glm::dvec2 p0, glm::dvec2 p1, glm::dvec2 p
     return { 
         .orient = orient, 
         .inner_idx = inner_p2_idx,
-        .outer_idx = outer_p2_idx };
+        .outer_idx = outer_p2_idx 
+    };
 }
 
 // https://www.codeproject.com/Articles/226569/Drawing-polylines-by-tessellation
@@ -299,31 +306,4 @@ void polyline_triangulate(std::span<const glm::dvec2> polyline, double width, dr
             stitch_edge = corner_triangulate(p0, polyline[i], p2, stitch_edge, width, dd, eps);
         }
     }
-}
-
-bbox3d center_drawdata_batch(std::span<draw_datad> batch)
-{
-    bbox3d batch_bbox;
-    for (draw_datad& dd : batch) {
-        for (size_t i = 0; i < dd.verts.size(); i += 3) {
-            batch_bbox.extend({ 
-                dd.verts[i + 0], 
-                dd.verts[i + 1], 
-                dd.verts[i + 2] 
-            });
-        }
-    }
-    glm::dvec3 batch_center = batch_bbox.center();
-    for (draw_datad& dd : batch) {
-        for (size_t i = 0; i < dd.verts.size(); i += 3) {
-            dd.verts[i + 0] -= batch_center.x;
-            dd.verts[i + 1] -= batch_center.y;
-            dd.verts[i + 2] -= batch_center.z;
-        }
-    }
-
-    bbox3d ret;
-    ret.min = batch_bbox.min - batch_center;
-    ret.max = batch_bbox.max - batch_center;
-    return ret;
 }

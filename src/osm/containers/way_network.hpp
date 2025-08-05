@@ -13,8 +13,7 @@
 #include <glm/glm.hpp>
 #include <osmium/osm/types.hpp>
 
-#include "../utils.hpp"
-#include "common.hpp"
+#include "../common.hpp"
 
 
 template <typename TWay>
@@ -121,8 +120,8 @@ struct way_network
     };
 
     // Collect path to the nearest intersection.
-    // \param nodeitr - iterator to the starting node
-    // \param adj_nodeid - id of the adjacent node to start collecting from
+    // \param nodeitr - iterator to starting node
+    // \param adj_nodeid - id of adjacent node to start collecting from
     bool path_to_intersection(node_itr start_nodeitr, osmium::object_id_type adj_nodeid, path& out_path)
     {
         assert(start_nodeitr->second.adj_node_ids.contains(adj_nodeid));
@@ -187,7 +186,7 @@ struct way_network
                 break; // stop at intersections
             }
 
-            osmium::object_id_type next_next_nodeid = -1;
+            osmium::object_id_type next_next_nodeid = -1; // out of bounds id
             if (next_node_adj_ids.size() == 2) 
             {
                 next_next_nodeid = *std::find_if(

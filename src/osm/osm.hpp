@@ -1,7 +1,6 @@
 #ifndef OSM_HPP
 #define OSM_HPP
 
-#include "../utils.hpp"
 #include "common.hpp"
 
 struct color_range 

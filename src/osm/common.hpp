@@ -7,6 +7,25 @@
 
 #include <glm/glm.hpp>
 
+#include "../utils.hpp"
+
+template <int N>
+struct ray
+{
+    using vec_t = glm::vec<N, double>;
+    vec_t origin;
+    vec_t dir;
+};
+
+using ray2d = ray<2>;
+using ray3d = ray<3>;
+
+struct param_range
+{
+    double min = 0.0;
+    double max = std::numeric_limits<double>::infinity();
+};
+
 // Axis-aligned bounding box.
 template <int N>
 struct bbox
@@ -35,20 +54,12 @@ struct bbox
     vec_t center() const {
         return (min + max) / 2.0;
     }
-
-    bool intersects(const bbox& rhs) const
-    {
-        // Check if there is some overlap on the right 
-        // (i.e. min before other box's max) and some overlap 
-        // on the left (max after other box's min)
-        return 
-            glm::all(glm::lessThanEqual(this->min, rhs.max)) &&
-            glm::all(glm::greaterThanEqual(this->max, rhs.min));
-    }
 };
 
-using bbox2d = bbox<2>;
-using bbox3d = bbox<3>;
+// 2D axis-aligned bounding box
+using bbox2d = bbox<2>; 
+// 3D axis-aligned bounding box
+using bbox3d = bbox<3>; 
 
 template <typename TVert>
 struct draw_data
@@ -57,10 +68,6 @@ struct draw_data
     glm::vec4 color;
     std::vector<TVert> verts;
     std::vector<uint32_t> tri_indices; // GL_TRIANGLES
-
-    draw_data() :
-        color(0.5f, 0.5f, 0.5f, 1.0f)
-    {}
 
     uint32_t add_vertex(TVert x, TVert y, TVert z)
     {

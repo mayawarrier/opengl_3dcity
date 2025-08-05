@@ -7,8 +7,11 @@
 #include <limits>
 #include <span>
 
-#include "../utils.hpp"
 #include "common.hpp"
+
+#define GLM_ENABLE_EXPERIMENTAL 1
+#include <glm/gtx/component_wise.hpp> 
+#include <glm/gtc/constants.hpp>
 
 using segment = std::pair<glm::dvec2, glm::dvec2>;
 
@@ -25,12 +28,12 @@ inline glm::dvec2 segment_mid(const segment& seg) {
 
 enum seg_inter_type
 {
-    INTER_PARALLEL,
-    INTER_COINCIDENT,
-    INTER_OUTSIDE_BOTH,
-    INTER_INSIDE_SEG1,
-    INTER_INSIDE_SEG2,
-    INTER_INSIDE_BOTH
+    SEG_INTER_PARALLEL,
+    SEG_INTER_COINCIDENT,
+    SEG_INTER_OUTSIDE_BOTH,
+    SEG_INTER_INSIDE_SEG1,
+    SEG_INTER_INSIDE_SEG2,
+    SEG_INTER_INSIDE_BOTH
 };
 
 struct seg_inter_result
@@ -62,6 +65,9 @@ bool segments_proper_intersect(const segment& seg1, const segment& seg2, double 
 
 // Get angle between two vectors (in radians).
 double angle_between(glm::dvec2 a, glm::dvec2 b);
+
+// Get the minimum angle between two vectors (in radians).
+double min_angle_between(glm::dvec2 a, glm::dvec2 b);
 
 enum orient_t
 {
@@ -102,8 +108,63 @@ std::vector<uint32_t> polygon_triangulate(std::span<const glm::dvec2> polygon, b
 // Triangulate a thick polyline.
 void polyline_triangulate(std::span<const glm::dvec2> polyline, double width, draw_datad& dd, double eps = 1e-9);
 
-// Center a batch of drawdata wrt to their global center.
-// Returns the bounding box of the centered data.
-bbox3d center_drawdata_batch(std::span<draw_datad> batch);
+// Check if two bounding boxes intersect.
+template <int N>
+bool bbox_intersects_bbox(const bbox<N>& lhs, const bbox<N>& rhs)
+{
+    // Check if there is some overlap on the right 
+    // (i.e. min before other box's max) and some overlap 
+    // on the left (max after other box's min)
+    return
+        glm::all(glm::lessThanEqual(lhs.min, rhs.max)) &&
+        glm::all(glm::greaterThanEqual(lhs.max, rhs.min));
+}
+
+enum ray_bbox_inter_type
+{
+    RAYBOX_INTER_NONE = 0,
+    RAYBOX_INTER_BORDER,
+    RAYBOX_INTER_INSIDE
+};
+
+// Check if ray intersects a bounding box.
+// If ray is normalized, t is distance.
+template <int N>
+ray_bbox_inter_type ray_intersects_bbox(const ray<N>& ray, 
+    const bbox<N>& bbox, double& out_t, const param_range& t_range = {})
+{
+    glm::vec<N, double> tentries, texits;
+
+    // intersect ray with every plane of the box
+    for (int i = 0; i < N; ++i)
+    {
+        if (ray.dir[i] == 0) [[unlikely]]
+        {
+            // if not moving in this dim, must be within bounds
+            if (ray.origin[i] < bbox.min[i] || ray.origin[i] > bbox.max[i]) {
+                return RAYBOX_INTER_NONE;
+            }
+            tentries[i] = -std::numeric_limits<double>::infinity();
+            texits[i] = std::numeric_limits<double>::infinity();
+        }
+        else {
+            double tmin = (bbox.min[i] - ray.origin[i]) / ray.dir[i];
+            double tmax = (bbox.max[i] - ray.origin[i]) / ray.dir[i];
+            std::tie(tentries[i], texits[i]) = std::minmax(tmin, tmax);
+        }
+    }
+
+    double tentry = glm::compMax(tentries);
+    double texit = glm::compMin(texits);
+
+    if (tentry > texit || tentry > t_range.max || texit < t_range.min) {
+        return RAYBOX_INTER_NONE;
+    }
+    // t_entry <= t_range.max already checked
+    bool on_border = tentry >= t_range.min; 
+
+    out_t = on_border ? tentry : t_range.min;
+    return on_border ? RAYBOX_INTER_BORDER : RAYBOX_INTER_INSIDE;
+}
 
 #endif

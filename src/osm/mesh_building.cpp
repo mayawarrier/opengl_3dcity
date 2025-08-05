@@ -8,9 +8,7 @@
 #include <osmium/geom/coordinates.hpp>
 #include <osmium/geom/mercator_projection.hpp>
 
-#include "../utils.hpp"
-#include "aabb_tree.hpp"
-
+#include "containers/aabb_tree.hpp"
 #include "mesh.hpp"
 
 

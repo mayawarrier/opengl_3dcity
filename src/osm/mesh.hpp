@@ -7,7 +7,8 @@
 #include <osmium/osm/types.hpp>
 #include <osmium/fwd.hpp>
 
-#include "aabb_tree.hpp"
+#include "common.hpp"
+#include "containers/aabb_tree.hpp"
 #include "geom.hpp"
 
 

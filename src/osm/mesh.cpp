@@ -1,5 +1,33 @@
 #include "mesh.hpp"
 
+static bbox3d center_drawdata_batch(std::span<draw_datad> batch)
+{
+    bbox3d batch_bbox;
+    for (draw_datad& dd : batch) {
+        for (size_t i = 0; i < dd.verts.size(); i += 3) {
+            batch_bbox.extend({
+                dd.verts[i + 0],
+                dd.verts[i + 1],
+                dd.verts[i + 2]
+            });
+        }
+    }
+    glm::dvec3 batch_center = batch_bbox.center();
+    for (draw_datad& dd : batch) {
+        for (size_t i = 0; i < dd.verts.size(); i += 3) {
+            dd.verts[i + 0] -= batch_center.x;
+            dd.verts[i + 1] -= batch_center.y;
+            dd.verts[i + 2] -= batch_center.z;
+        }
+    }
+
+    bbox3d ret;
+    ret.min = batch_bbox.min - batch_center;
+    ret.max = batch_bbox.max - batch_center;
+    return ret;
+}
+
+
 std::vector<draw_datad> mesh_builder::get_draw_data()
 {
     aabb_tree<building*> bldg_tree;
