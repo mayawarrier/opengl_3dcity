@@ -517,49 +517,110 @@ bool mesh_builder::gen_street_drawdata(std::vector<draw_datad>& drawdata, const 
             outlines.resize(2);
         }
 
-        // join the outlines into a single oriented polygon
+        // join the outlines into a single oriented polygon in an order that doesn't intersect itself
+        // and triangulate it
+        
         std::vector<std::pair<osmium::object_id_type, glm::dvec2>> joined_outline;
-        for (size_t i = 0; i < outlines.size(); ++i)
-        {
-            auto& outline = outlines[i];
-            if (outline.size() < 2) {
-                continue; // skip outlines with less than 2 points
-            }
 
-            // check if the outline is oriented clockwise or counter-clockwise
-            std::vector<glm::dvec2> outline_verts;
-            outline_verts.reserve(outline.size());
-            for (auto & point : outline) {
-                outline_verts.push_back(point.second);
-            }
+        if (outlines.size() == 2) {
+            //auto segment_intersects_outline = [](std::vector<std::pair<osmium::object_id_type, glm::dvec2>>& outline, const segment& seg, double eps) -> bool
+            //    {
+            //        for (size_t i = 0; i < outline.size() - 1; ++i)
+            //        {
+            //            seg_inter_result result;
+            //            segment outline_seg = { outline[i].second, outline[i + 1].second };
+            //            if (segments_intersect(seg, outline_seg, result, eps)) {
+            //                return true;
+            //            }
+            //        }
+            //        return false;
+            //    };
+            //
+            //bool found_join = false;
+            //if (!segment_intersects_outline(outlines[0], { outlines[0].back().second, outlines[1].front().second }, eps)) {
+            //    found_join = true;
+            //}
+            //if (!found_join && !segment_intersects_outline(outlines[0], { outlines[0].back().second, outlines[1].back().second }, eps)) {
+            //    found_join = true;
+            //    std::reverse(outlines[1].begin(), outlines[1].end());
+            //}
+            //
+            //joined_outline = std::move(outlines[0]);
+            //if (found_join) {
+            //    joined_outline.insert(joined_outline.end(), outlines[1].begin(), outlines[1].end());
+            //}
+            //else {
+            //    logWARNING("Could not find a way to join the two outlines without intersection. Just appending.");
+            //    // just append, will triangulate anyway
+            //    joined_outline.insert(joined_outline.end(), outlines[1].begin(), outlines[1].end());
+            //}
 
-            bool is_anticlockwise = polygon_orient(outline_verts) == ORIENT_CCW;
-            if (is_anticlockwise) {
-                // reverse the outline to make it clockwise
-                std::reverse(outline.begin(), outline.end());
-            }
+            double dist1 = vec_sqlength(outlines[0].back().second - outlines[1].front().second);
+            double dist2 = vec_sqlength(outlines[0].back().second - outlines[1].back().second);
 
-            // add the outline to the joined outline
-            if (joined_outline.empty()) {
-                joined_outline = std::move(outline);
+            if (dist1 < dist2) {
+                // join the outlines by connecting the last point of the first outline to the first point of the second outline
+                joined_outline = std::move(outlines[0]);
+                //joined_outline.back() = { outlines[1].front().first, outlines[1].front().second };
+                joined_outline.insert(joined_outline.end(), outlines[1].begin(), outlines[1].end());
             }
             else {
-                //// check if the last point of the joined outline is the same as the first point of the outline
-                //if (joined_outline.back().first == outline.front().first) {
-                //    joined_outline.back().second = outline.front().second; // update the last point
-                //    joined_outline.insert(joined_outline.end(), outline.begin() + 1, outline.end());
-                //}
-                //else if (joined_outline.front().first == outline.back().first) {
-                //    joined_outline.front().second = outline.back().second; // update the first point
-                //    joined_outline.insert(joined_outline.begin(), outline.begin(), outline.end() - 1);
-                //}
-                //else {
-                //    // no connection, just append
-                //    
-                //}
-                joined_outline.insert(joined_outline.end(), outline.begin(), outline.end());
+                // join the outlines by connecting the last point of the first outline to the last point of the second outline
+                joined_outline = std::move(outlines[0]);
+                std::reverse(outlines[1].begin(), outlines[1].end());
+                joined_outline.insert(joined_outline.end(), outlines[1].begin(), outlines[1].end());
+
+                //joined_outline.back() = { outlines[1].back().first, outlines[1].back().second };
+                //joined_outline.insert(joined_outline.end(), outlines[1].begin(), outlines[1].end() - 1);
             }
         }
+        else if (outlines.size() == 1) {
+            joined_outline = std::move(outlines[0]);
+        }
+        else {
+            continue; // skip if no outlines
+        }
+
+
+
+        //for (size_t i = 0; i < outlines.size(); ++i)
+        //{
+        //    auto& outline = outlines[i];
+        //
+        //    // check if the outline is oriented clockwise or counter-clockwise
+        //    std::vector<glm::dvec2> outline_verts;
+        //    outline_verts.reserve(outline.size());
+        //    for (auto & point : outline) {
+        //        outline_verts.push_back(point.second);
+        //    }
+        //
+        //    bool is_anticlockwise = polygon_orient(outline_verts) == ORIENT_CCW;
+        //    if (is_anticlockwise) {
+        //        // reverse the outline to make it clockwise
+        //        std::reverse(outline.begin(), outline.end());
+        //    }
+        //
+        //    // add the outline to the joined outline
+        //    if (joined_outline.empty()) {
+        //        joined_outline = std::move(outline);
+        //    }
+        //    else {
+        //        //// check if the last point of the joined outline is the same as the first point of the outline
+        //        //if (joined_outline.back().first == outline.front().first) {
+        //        //    joined_outline.back().second = outline.front().second; // update the last point
+        //        //    joined_outline.insert(joined_outline.end(), outline.begin() + 1, outline.end());
+        //        //}
+        //        //else if (joined_outline.front().first == outline.back().first) {
+        //        //    joined_outline.front().second = outline.back().second; // update the first point
+        //        //    joined_outline.insert(joined_outline.begin(), outline.begin(), outline.end() - 1);
+        //        //}
+        //        //else {
+        //        //    // no connection, just append
+        //        //    
+        //        //}
+        //        joined_outline.insert(joined_outline.end(), outline.begin(), outline.end());
+        //    }
+        //}
 
         if (joined_outline.size() < 3) {
             continue; // skip outlines with less than 3 points
@@ -570,7 +631,10 @@ bool mesh_builder::gen_street_drawdata(std::vector<draw_datad>& drawdata, const 
         for (const auto& point : joined_outline) {
             joined_outline_verts.push_back(point.second);
         }
-        auto tri_indices = polygon_triangulate(joined_outline_verts);
+
+        auto joined_orient = polygon_orient(joined_outline_verts);
+
+        auto tri_indices = polygon_triangulate(joined_outline_verts, joined_orient == ORIENT_CCW);
         if (tri_indices.empty()) {
             continue; // skip outlines with no triangles
         }
