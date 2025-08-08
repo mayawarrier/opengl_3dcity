@@ -63,12 +63,6 @@ public:
         std::vector<building_part*> parts;
     };
 
-    struct way_node
-    {
-        osmium::object_id_type id;
-        glm::dvec2 vert;
-    };
-
     struct highway
     {
         osmium::object_id_type id;

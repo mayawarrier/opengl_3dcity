@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <vector>
 
+#include <osmium/osm/types.hpp>
 #include <glm/glm.hpp>
 
 #include "../utils.hpp"
@@ -120,6 +121,12 @@ enum way_type
     WAY_TYPE_UNKNOWN,
     WAY_TYPE_STREET,
     WAY_TYPE_FOOTWAY
+};
+
+struct way_node
+{
+    osmium::object_id_type id;
+    glm::dvec2 vert;
 };
 
 #endif

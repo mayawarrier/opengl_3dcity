@@ -18,9 +18,8 @@ struct aabb_tree_traits
 };
 
 // Axis-aligned bounding box tree.
-// T = type of objects stored in the tree. 
-// Assumed to be cheap to copy or a pointer type.
-// The tree does not own the objects!
+// T = Assumed to be a pointer type or cheap to copy.
+// Tree does not own the stored objects!
 template <typename T>
 class aabb_tree
 {
@@ -42,24 +41,24 @@ public:
         m_root(nullptr)
     {}
 
+    MOVE_ONLY_CLASS(aabb_tree, m_root, nullptr)
+
     // Changes the order of the source array!
     static aabb_tree create_unsafe(T* objects, size_t num_objects) {
         return { objects, num_objects };
     }
-
-    MOVE_ONLY_CLASS(aabb_tree, m_root, nullptr)
 
     std::vector<T> intersect(const bbox2d& bbox) const
     {
         std::vector<T> ret;
 
         std::vector<node*> nodes;
-        auto insert_if_intersects = [&](node* node) {
+        auto push_node_if_intersects = [&](node* node) {
             if (node && bbox_intersects_bbox(node->bbox, bbox))
                 nodes.push_back(node);
         };
 
-        insert_if_intersects(m_root);
+        push_node_if_intersects(m_root);
 
         while (!nodes.empty())
         {
@@ -67,8 +66,8 @@ public:
             nodes.pop_back();
 
             // If it intersects, search further down the tree
-            insert_if_intersects(node->left);
-            insert_if_intersects(node->right);
+            push_node_if_intersects(node->left);
+            push_node_if_intersects(node->right);
 
             if (!node->left && !node->right) {
                 ret.push_back(((leafnode*)node)->data);
@@ -77,19 +76,19 @@ public:
         return ret;
     }
 
-    // \param intersects_object
-    // callable of type bool(const ray2d&, const T&, double& out_dist, const param_range&)
-    bool ray_first_intersect(const ray2d& ray, auto ray_intersects_object,
-        double& out_t, T& out_object, const param_range& t_range = {}) const
+    // \param ray_hits_object_cb
+    // callback of type bool(const ray2d&, const T&, double& out_t, const param_range&, double eps)
+    bool ray_first_hit(const ray2d& ray, auto ray_hits_object_cb, 
+        double& out_t, T& out_object, const param_range& t_range = {}, double eps = 1e-9) const
     {
         double min_hit_t = std::numeric_limits<double>::infinity();
         T* min_hit_object = nullptr;
 
         std::vector<node*> nodes;
-        auto insert_if_intersects = [&](node* node) 
+        auto push_node_if_hit = [&](node* node) 
         {
             if (node) {
-                double t = -std::numeric_limits<double>::infinity();
+                double t = std::numeric_limits<double>::infinity();
                 auto inter_type = ray_intersects_bbox(ray, node->bbox, t, t_range);
 
                 // No intersection or too far, do not search this subtree.
@@ -104,7 +103,7 @@ public:
             }
         };
 
-        insert_if_intersects(m_root);
+        push_node_if_hit(m_root);
         
         while (!nodes.empty())
         {
@@ -112,15 +111,16 @@ public:
             nodes.pop_back();
 
             // If it intersects, search further down the tree
-            insert_if_intersects(node->left);
-            insert_if_intersects(node->right);
+            push_node_if_hit(node->left);
+            push_node_if_hit(node->right);
 
             if (!node->left && !node->right) 
             {
                 auto* leaf = (leafnode*)node;
 
-                double t;
-                if (std::invoke(ray_intersects_object, ray, leaf->data, t, t_range) && t < min_hit_t) {
+                double t = std::numeric_limits<double>::infinity();
+                bool inter = std::invoke(ray_hits_object_cb, ray, leaf->data, t, t_range, eps);
+                if (inter && t < min_hit_t) {
                     min_hit_t = t;
                     min_hit_object = &leaf->data;
                 }

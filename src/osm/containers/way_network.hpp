@@ -109,8 +109,7 @@ struct way_network
     {
         struct node 
         {
-            osmium::object_id_type id;
-            glm::dvec2 vert;
+            way_node info;
             // way into this node from the previous node,
             // null for the first node in the path
             const TWay* in_way;
@@ -133,8 +132,10 @@ struct way_network
         const TWay* prev_edgeway = nullptr;
 
         path_nodes.push_back({
-            .id = start_nodeitr->first,
-            .vert = start_nodeitr->second.vert,
+            .info = {
+                .id = start_nodeitr->first,
+                .vert = start_nodeitr->second.vert
+            },
             .in_way = nullptr
         });
 
@@ -170,8 +171,10 @@ struct way_network
             }
 
             path_nodes.push_back({
-                .id = next_nodeitr->first,
-                .vert = next_nodeitr->second.vert,
+                .info = {
+                    .id = next_nodeitr->first,
+                    .vert = next_nodeitr->second.vert
+                },
                 .in_way = cur_edge.way
             });
 
@@ -190,8 +193,7 @@ struct way_network
             if (next_node_adj_ids.size() == 2) 
             {
                 next_next_nodeid = *std::find_if(
-                    next_node_adj_ids.begin(),
-                    next_node_adj_ids.end(), 
+                    next_node_adj_ids.begin(), next_node_adj_ids.end(), 
                     [&](auto id) { return id != cur_nodeid; });
             }
 

@@ -159,71 +159,59 @@ static std::vector<way_net::path> get_all_paths_bw_intersections(way_net& networ
     return ret;
 }
 
-
-struct path_with_segments;
-
 struct path_segment
 {
-    glm::dvec2 start, end;
-    osmium::object_id_type startid, endid;
+    way_node start, end;
     bbox2d bbox;
     const mesh_builder::highway* way;
-    path_with_segments* parent;
-};
-
-struct path_with_segments
-{
-    way_net::path net_path;
-    std::vector<path_segment> segments;
+    const way_net::path* parent;
 };
 
 template <>
 struct aabb_tree_traits<path_segment*>
 {
-    static bbox2d bbox(const path_segment* seg) {
+    static const bbox2d& bbox(const path_segment* seg) {
         return seg->bbox;
     }
 };
 
-static size_t add_path_segments(std::vector<path_with_segments>& paths)
+static std::span<path_segment> add_path_segments(
+    std::vector<path_segment>& segments, const std::vector<way_net::path>& paths)
 {
-    size_t total_segments = 0;
-    for (auto& path_w_segment : paths)
+    auto segments_start = &segments[segments.size()];
+    for (auto& path : paths)
     {
-        auto& path = path_w_segment.net_path;
         assert(path.nodes.size() >= 2);
 
         for (size_t i = 0; i < path.nodes.size() - 1; ++i)
         {
-            const auto& start_node = path.nodes[i];
-            const auto& end_node = path.nodes[i + 1];
-            
-            bbox2d bbox;
-            bbox.extend(start_node.vert);
-            bbox.extend(end_node.vert);
+            auto& start = path.nodes[i];
+            auto& end = path.nodes[i + 1];
 
-            path_w_segment.segments.push_back({
-                .start = start_node.vert,
-                .end = end_node.vert,
-                .startid = start_node.id,
-                .endid = end_node.id,
+            bbox2d bbox;
+            bbox.extend(start.info.vert);
+            bbox.extend(end.info.vert);
+
+            segments.push_back({
+                .start = start.info,
+                .end = end.info,
                 .bbox = bbox,
-                .way = end_node.in_way,
-                .parent = &path_w_segment
+                .way = end.in_way,
+                .parent = &path
             });
-            total_segments++;
         }
     }
-    return total_segments;
+    auto segments_end = &segments[segments.size()];
+    return { segments_start, segments_end };
 }
 
 #ifdef NDEBUG
-using street_outlines_map_t = boost::unordered::unordered_flat_map<path_with_segments*, std::vector<path_segment*>>;
+template <typename ...Args> using street_outlines_map_t = boost::unordered::unordered_flat_map<Args...>;
 #else
-using street_outlines_map_t = std::unordered_map<path_with_segments*, std::vector<path_segment*>>;
+template <typename ...Args> using street_outlines_map_t = std::unordered_map<Args...>;
 #endif
 
-static street_outlines_map_t gen_street_outlines(std::vector<path_with_segments>& footpaths, std::vector<path_with_segments>& streets, double eps)
+static void gen_street_outlines(const std::vector<way_net::path>& footpaths, const std::vector<way_net::path>& streets, double eps)
 {
     // for each footpath segment, find nearby street segments
     // if within a certain distance and angular tolerance, associate the footpath segment to the street segment
@@ -241,96 +229,98 @@ static street_outlines_map_t gen_street_outlines(std::vector<path_with_segments>
     // or more precisely, when the matched street segment changes
     // This allows cutting footpaths to match their corresponding street segments
 
-    size_t num_footpath_segments = add_path_segments(footpaths);
-    size_t num_street_segments = add_path_segments(streets);
-
-    // Build aabb tree of path segments
-
+    std::vector<path_segment> path_segments;
+    auto footpath_segs = add_path_segments(path_segments, footpaths);
+    auto street_segs = add_path_segments(path_segments, streets);
     
-    size_t tree_objects_idx = 0;
-    size_t tree_size = num_footpath_segments + num_street_segments;
-
-    auto tree_objects = std::make_unique<path_segment*[]>(tree_size);
-    for (size_t i = 0; i < footpaths.size(); ++i) {
-        for (size_t j = 0; j < footpaths[i].segments.size(); ++j) {
-            tree_objects[tree_objects_idx++] = &footpaths[i].segments[j];
-        }
-    }
-    for (size_t i = 0; i < streets.size(); ++i) {
-        for (size_t j = 0; j < streets[i].segments.size(); ++j) {
-            tree_objects[tree_objects_idx++] = &streets[i].segments[j];
-        }
-    }
-    auto pathseg_tree = aabb_tree<path_segment*>::create_unsafe(tree_objects.get(), tree_size);
-
-    auto ray_intersects_street = [&](const ray2d& ray, path_segment* cand_pathseg, double& out_dist, const param_range& t_range)
+    aabb_tree<path_segment*> pathseg_tree;
     {
-        // check if the segment intersects with the ray using segments_intersect, and check if within the angular tolerance
-
-        if (cand_pathseg->way->type != WAY_TYPE_STREET) {
-            return false;
+        auto tree_objects = std::make_unique<path_segment*[]>(path_segments.size());
+        for (size_t i = 0; i < path_segments.size(); ++i) {
+            tree_objects[i] = &path_segments[i];
         }
+        pathseg_tree = aabb_tree<path_segment*>::create_unsafe(tree_objects.get(), path_segments.size());
+    }
 
-        if (cand_pathseg->startid == 1801247229 && cand_pathseg->endid == 2155391487) {
-            logMESSAGE("debug");
-        }
+    auto ray_street_hit = [&](const ray2d& ray, double& out_dist, path_segment*& out_seg)
+    {
+        return pathseg_tree.ray_first_hit(ray, 
+            [](const ray2d& ray, path_segment* cand, double& out_dist, const param_range& t_range, double eps)
+            {
+                if (cand->way->type != WAY_TYPE_STREET) {
+                    return false;
+                }
+                // check if footpath and street are somewhat parallel
+                double angle_bw = min_angle_between(ray.dir, cand->end.vert - cand->start.vert);
+                if (std::abs(glm::degrees(angle_bw) - 90.0) > 45.0) {
+                    return false;
+                }
 
-        // check angular tolerance
-        if (std::abs(glm::degrees(min_angle_between(ray.dir, cand_pathseg->end - cand_pathseg->start)) - 90.0) > 45.0) {
-            return false;
-        }
-        
-        segment ray_seg = { 
-            ray.origin + (t_range.min * ray.dir), 
-            ray.origin + (t_range.max * ray.dir) 
-        };
-        segment cand_seg = { cand_pathseg->start, cand_pathseg->end };
+                segment ray_seg = {
+                    ray.origin + (t_range.min * ray.dir),
+                    ray.origin + (t_range.max * ray.dir)
+                };
+                segment cand_seg = { cand->start.vert, cand->end.vert };
 
-        seg_inter_result inter_res;
-        if (segments_intersect(ray_seg, cand_seg, inter_res, eps)) {
-            out_dist = glm::length(inter_res.point - ray.origin);
-            return true;
-        }
-        else { return false; }
+                seg_inter_result inter_res;
+                if (segments_intersect(ray_seg, cand_seg, inter_res, eps)) {
+                    out_dist = glm::length(inter_res.point - ray.origin);
+                    return true;
+                }
+                else { return false; }
+            },
+            out_dist, out_seg, { .min = 0.0, .max = 25.0 });
     };
 
-    street_outlines_map_t street_outlines;
-    for (auto& footpath : footpaths)
-    {
-        for (auto & seg : footpath.segments) 
-        {
-            if (seg.startid == 394499187 && seg.endid == 394499188) {
-                logMESSAGE("debug");
-            }
+    street_outlines_map_t<const way_net::path*, std::vector<path_segment*>> street_outlines;
 
-            // shoot a ray from the midpoint of the segment to both perpendicular directions
+    for (auto& fseg : footpath_segs)
+    {
+        glm::dvec2 seg_vec = fseg.end.vert - fseg.start.vert;
+        glm::dvec2 seg_perp_dir = glm::normalize(vec_perp(seg_vec));
+
+        double seg_length = glm::length(seg_vec);
+        // todo: check if seg_length is a perfect divisor of 5.0
+        int num_rays = std::max(1, int(seg_length / 5.0)) + 1;
+
+        for (int i = 0; i < num_rays; ++i)
+        {
             ray2d ray{
-                .origin = (seg.start + seg.end) / 2.0,
-                .dir = glm::normalize(vec_perp(seg.end - seg.start))
+                .origin = fseg.start.vert + (double(i) / num_rays) * seg_vec,
+                .dir = seg_perp_dir
             };
 
-            double ray1_inter_dist;
-            path_segment* ray1_inter_seg = nullptr;
-            pathseg_tree.ray_first_intersect(ray, ray_intersects_street, 
-                ray1_inter_dist, ray1_inter_seg, {.min = 0.0, .max = 25.0 });
+            // shoot a ray in the perpendicular direction
+            // if in the same direction, the street hit changes as I sweep through the footpath segment,
+            // cut the footpath segment at that point. The cut cannot be done here since the aabb_tree
+            // would be invalidated, so the cut info needs to be stored 
+            // maybe I don't need to cut the footpath segment, but rather just add additional points
+            // in between that can be used to draw the street outlines, that way no additional footpath segs need to be added
+            // and the footpath segment can be used as is
 
-            ray.dir = -ray.dir;
-            double ray2_inter_dist;
-            path_segment* ray2_inter_seg = nullptr;
-            pathseg_tree.ray_first_intersect(ray, ray_intersects_street, 
-                ray2_inter_dist, ray2_inter_seg, { .min = 0.0, .max = 25.0 });
+            // street_outlines can be a map of street paths to a vector of footpath segment pieces (pieces are generated from cuts)
+        }
+        
+        
 
-            // add the footpath segment to the street outlines map
-            if (ray1_inter_seg) {
-                street_outlines[ray1_inter_seg->parent].push_back(&seg);
-            }
-            if (ray2_inter_seg) {
-                street_outlines[ray2_inter_seg->parent].push_back(&seg);
-            }
+        double ray1_inter_dist;
+        path_segment* ray1_inter_seg = nullptr;
+        shoot_ray(ray, ray1_inter_dist, ray1_inter_seg);
+
+        ray.dir = -ray.dir;
+        double ray2_inter_dist;
+        path_segment* ray2_inter_seg = nullptr;
+        shoot_ray(ray, ray2_inter_dist, ray2_inter_seg);
+
+        // add the footpath segment to the street outlines map
+        if (ray1_inter_seg) {
+            street_outlines[ray1_inter_seg->parent].push_back(&fseg);
+        }
+        if (ray2_inter_seg) {
+            street_outlines[ray2_inter_seg->parent].push_back(&fseg);
         }
     }
 
-    return street_outlines;
 }
 
 static void gen_path_drawdata(draw_datad& dd, const way_net::path& path, double eps)
@@ -429,17 +419,24 @@ bool mesh_builder::gen_street_drawdata(std::vector<draw_datad>& drawdata, const 
         auto& street = *outline_itr->first;
         auto& street_outline_segs = outline_itr->second;
 
-        // connect the segments of the street outline
-        logMESSAGE("Wait here");
-
         if (street.net_path.type == WAY_TYPE_STREET) {
             auto itr = std::find_if(street.net_path.nodes.begin(), street.net_path.nodes.end(),
-                [](auto& n) { return n.id == 1801247228; });
+                [](auto& n) { return n.id == 8939625159; });
 
             if (itr != street.net_path.nodes.end()) {
-                logMESSAGE("Found street node with id 1801247228");
+                logMESSAGE("Found street node with id 8939625159");
             }
+
+            //8939625159
+            //344477816
+            auto itr2 = std::find_if(street.segments.begin(), street.segments.end(),
+                [](auto& seg) { return seg.startid == 8939625159 && seg.endid == 344477816; });
+            if (itr2 != street.segments.end()) {
+                logMESSAGE("Found street segment with ids 8939625159 and 344477816");
+            }
+
         }
+        
 
         // connect the segments in order, by checking the end of one segment to the start of another
         std::vector<std::vector<std::pair<osmium::object_id_type, glm::dvec2>>> outlines;
