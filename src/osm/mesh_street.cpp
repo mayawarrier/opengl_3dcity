@@ -14,26 +14,6 @@
 #include "mesh.hpp"
 
 
-bool mesh_builder::add_highway(const highway_info& info)
-{
-    std::vector<way_node> nodes;
-    for (const auto& nr : info.way.nodes)
-    {
-        auto proj = osmium::geom::MercatorProjection{}(nr.location());
-        nodes.push_back({ nr.ref(), glm::dvec2(proj.x, proj.y) });
-    }
-
-    m_highways.push_back({
-        .id = info.way.id,
-        .name = info.way.name ? info.way.name : "",
-        .type = info.type,
-        .nodes = std::move(nodes),
-        .width = info.width,
-    });
-
-    return true;
-}
-
 // instead of working with ids, maybe I dynamically allocate upfront
 // (i.e. convert all the node ids into node pointers)
 // all the nodes and edges and then point them to each other via pointers?
@@ -94,6 +74,27 @@ bool mesh_builder::add_highway(const highway_info& info)
 // If there is an entry in the supplemental file, it will be used to refine the mesh of the street
 // An entry consists of 2 nodes (from intersection to intersection)
 
+bool mesh_builder::add_highway(const highway_info& info)
+{
+    std::vector<way_node> nodes;
+    for (const auto& nr : info.way.nodes)
+    {
+        auto proj = osmium::geom::MercatorProjection{}(nr.location());
+        nodes.push_back({ nr.ref(), glm::dvec2(proj.x, proj.y) });
+    }
+
+    m_highways.push_back({
+        .id = info.way.id,
+        .name = info.way.name ? info.way.name : "",
+        .type = info.type,
+        .nodes = std::move(nodes),
+        .width = info.width,
+    });
+
+    return true;
+}
+
+using way_net = way_network<mesh_builder::highway>;
 
 template <>
 struct way_network_traits<mesh_builder::highway>
@@ -102,8 +103,6 @@ struct way_network_traits<mesh_builder::highway>
         return way->type;
     }
 };
-
-using way_net = way_network<mesh_builder::highway>;
 
 static std::vector<way_net::path> get_all_paths_bw_intersections(way_net& network, way_net::node_itr start_node)
 {
@@ -121,7 +120,9 @@ static std::vector<way_net::path> get_all_paths_bw_intersections(way_net& networ
             index++;
         }
 
-        // start_node is in the middle of a path, merge both sides into one path
+        // start_node is in the middle of a path, merge both sides.
+        // This can be avoided if traversal always starts from intersections,
+        // but that could cause disconnected segments in the graph to be ignored.
         if (collected[0] && collected[1] && paths[0].type == paths[1].type)
         {
             auto& path0_nodes = paths[0].nodes;
@@ -129,7 +130,6 @@ static std::vector<way_net::path> get_all_paths_bw_intersections(way_net& networ
 
             std::reverse(path0_nodes.begin(), path0_nodes.end());
 
-            // reverse ways
             for (size_t i = 1; i < path0_nodes.size(); ++i) {
                 path0_nodes[i].in_way = path0_nodes[i - 1].in_way;
             }
@@ -159,7 +159,8 @@ static std::vector<way_net::path> get_all_paths_bw_intersections(way_net& networ
     return ret;
 }
 
-struct path_segment
+// Segment between two nodes in the network.
+struct path_seg
 {
     way_node start, end;
     bbox2d bbox;
@@ -167,18 +168,34 @@ struct path_segment
     const way_net::path* parent;
 };
 
-template <>
-struct aabb_tree_traits<path_segment*>
+// A piece of the segment that can 
+struct path_segpiece
 {
-    static const bbox2d& bbox(const path_segment* seg) {
+    // instead of start and end of the segment, I now have several
+    // pieces per path segment. I need to join them together
+    // somehow to create the final joined outline. How do I deal with holes?
+    // Forget holes for now, assume I get a continuous set of pieces per path segment
+    // and map the streets to the pieces.
+    // I need to join the pieces somehow. Joining only happens at the start and end of the segment.
+    // If I use an ID instead of start and end, I can use the ID to join the pieces together.
+    // I have to ensure that pieces at segment endpoints have the same start and end IDs if the segments are adjacent.
+
+    glm::dvec2 start, end;
+    path_seg* parent;
+};
+
+template <>
+struct aabb_tree_traits<path_seg*>
+{
+    static const bbox2d& bbox(const path_seg* seg) {
         return seg->bbox;
     }
 };
 
-static std::span<path_segment> add_path_segments(
-    std::vector<path_segment>& segments, const std::vector<way_net::path>& paths)
+static std::pair<size_t, size_t> add_path_segments(
+    std::vector<path_seg>& segments, const std::vector<way_net::path>& paths)
 {
-    auto segments_start = &segments[segments.size()];
+    auto startidx = segments.size();
     for (auto& path : paths)
     {
         assert(path.nodes.size() >= 2);
@@ -201,15 +218,129 @@ static std::span<path_segment> add_path_segments(
             });
         }
     }
-    auto segments_end = &segments[segments.size()];
-    return { segments_start, segments_end };
+    auto endidx = segments.size();
+    return { startidx, endidx };
 }
 
-#ifdef NDEBUG
-template <typename ...Args> using street_outlines_map_t = boost::unordered::unordered_flat_map<Args...>;
-#else
-template <typename ...Args> using street_outlines_map_t = std::unordered_map<Args...>;
-#endif
+struct ray_hit
+{
+    double dist;
+    path_seg* seg;
+};
+
+static bool ray_street_hit(const ray2d& ray, const aabb_tree<path_seg*>& seg_tree, 
+    const aabb_tree<mesh_builder::building*>& bldg_tree, ray_hit& out_hit, double eps)
+{
+    return seg_tree.ray_first_hit(ray,
+        [](const ray2d& ray, path_seg* cand, double& out_canddist, const param_range& t_range, double eps)
+        {
+            if (cand->way->type != WAY_TYPE_STREET) {
+                return false;
+            }
+
+            // check if footpath and street are somewhat parallel
+            double angle_bw = min_angle_between(ray.dir, cand->end.vert - cand->start.vert);
+            if (std::abs(glm::degrees(angle_bw) - 90.0) > 45.0) {
+                return false;
+            }
+
+            segment ray_seg = {
+                ray.origin + (t_range.min * ray.dir),
+                ray.origin + (t_range.max * ray.dir)
+            };
+            segment cand_seg = { cand->start.vert, cand->end.vert };
+
+            seg_inter_result inter_res;
+            if (segments_intersect(ray_seg, cand_seg, inter_res, eps)) {
+                out_canddist = glm::length(inter_res.point - ray.origin);
+                return true;
+            }
+            else { return false; }
+        },
+        out_hit.dist, out_hit.seg, { .min = 0.0, .max = 25.0 }, eps);
+};
+
+using street_footpath_map_t = types::unord_flat_map<const way_net::path*, std::vector<path_segpiece>>;
+
+static street_footpath_map_t map_streets_to_footpaths(const aabb_tree<path_seg*>& seg_tree,
+    const aabb_tree<mesh_builder::building*>& bldg_tree, std::span<const path_seg> footpath_segs, 
+    std::vector<glm::dvec2>& out_outline_verts, double eps)
+{
+    static constexpr double RAY_FIRE_INTERVAL = 5.0; // meters
+
+    std::pmr::pool_options opts;
+    opts.max_blocks_per_chunk = 2;
+    opts.largest_required_pool_block = 0;
+
+    std::pmr::unsynchronized_pool_resource pool{ opts };
+    std::pmr::polymorphic_allocator<ray_hit> rayhit_alloc { &pool };
+    std::pmr::polymorphic_allocator<glm::dvec2> rayorig_alloc { &pool };
+
+    // shoot a ray in the perpendicular direction
+            // if in the same direction, the street hit changes as I sweep through the footpath segment,
+            // cut the footpath segment at that point. The cut cannot be done here since the aabb_tree
+            // would be invalidated, so the cut info needs to be stored 
+            // maybe I don't need to cut the footpath segment, but rather just add additional points
+            // in between that can be used to draw the street outlines, that way no additional footpath segs need to be added
+            // and the footpath segment can be used as is
+
+            // street_outlines can be a map of street paths to a vector of footpath segment pieces (pieces are generated from cuts)
+
+    auto add_mapping = [&](std::span<const glm::dvec2> ray_origins, glm::dvec2 ray_dir)
+    {
+        size_t num_rays = ray_origins.size();
+        auto ray_hits = rayhit_alloc.allocate(num_rays);
+
+        for (size_t i = 0; i < num_rays; ++i)
+        {
+            ray2d ray{ .origin = ray_origins[i], .dir = ray_dir };
+            ray_street_hit(ray, seg_tree, bldg_tree, ray_hits[i], eps);
+        }
+
+        size_t rayidx = 0;
+        while (rayidx < num_rays)
+        {
+            size_t piece_startidx = rayidx, piece_endidx = 0;
+
+            while (piece_startidx < num_rays && !ray_hits[piece_startidx].seg) {
+                piece_startidx++;
+            }
+            piece_endidx = piece_startidx + 1;
+
+            while (piece_endidx < num_rays && ray_hits[piece_endidx].seg &&
+                ray_hits[piece_endidx].seg->parent == ray_hits[piece_startidx].seg->parent) {
+                piece_endidx++;
+            }
+
+        }
+
+        rayhit_alloc.deallocate(ray_hits, num_rays);
+    };
+
+    street_footpath_map_t street_outlines;
+
+    for (auto& fseg : footpath_segs)
+    {
+        glm::dvec2 seg_vec = fseg.end.vert - fseg.start.vert;
+        glm::dvec2 seg_perp_dir = glm::normalize(vec_perp(seg_vec));
+
+        double seg_length = glm::length(seg_vec);
+        int num_rays = std::max(1, int(std::ceil(seg_length / RAY_FIRE_INTERVAL - eps))) + 1;
+
+        auto ray_origins = rayorig_alloc.allocate(num_rays);
+        for (int i = 0; i < num_rays; ++i) {
+            ray_origins[i] = fseg.start.vert + (double(i) / num_rays) * seg_vec;
+        }
+
+        // add the footpath segment to the street outlines map
+        if (ray1_inter_seg) {
+            street_outlines[ray1_inter_seg->parent].push_back(&fseg);
+        }
+        if (ray2_inter_seg) {
+            street_outlines[ray2_inter_seg->parent].push_back(&fseg);
+        }
+    }
+}
 
 static void gen_street_outlines(const std::vector<way_net::path>& footpaths, const std::vector<way_net::path>& streets, double eps)
 {
@@ -229,97 +360,25 @@ static void gen_street_outlines(const std::vector<way_net::path>& footpaths, con
     // or more precisely, when the matched street segment changes
     // This allows cutting footpaths to match their corresponding street segments
 
-    std::vector<path_segment> path_segments;
-    auto footpath_segs = add_path_segments(path_segments, footpaths);
-    auto street_segs = add_path_segments(path_segments, streets);
+    std::vector<path_seg> path_segments;
+    auto fseg_startend = add_path_segments(path_segments, footpaths);
+    auto sseg_startend = add_path_segments(path_segments, streets);
+
+    std::span<path_seg> footpath_segs(
+        path_segments.data() + fseg_startend.first, 
+        fseg_startend.second - fseg_startend.first
+    );
     
-    aabb_tree<path_segment*> pathseg_tree;
+    aabb_tree<path_seg*> pathseg_tree;
     {
-        auto tree_objects = std::make_unique<path_segment*[]>(path_segments.size());
+        auto tree_objects = std::make_unique<path_seg*[]>(path_segments.size());
         for (size_t i = 0; i < path_segments.size(); ++i) {
             tree_objects[i] = &path_segments[i];
         }
-        pathseg_tree = aabb_tree<path_segment*>::create_unsafe(tree_objects.get(), path_segments.size());
+        pathseg_tree = aabb_tree<path_seg*>::create_unsafe(tree_objects.get(), path_segments.size());
     }
 
-    auto ray_street_hit = [&](const ray2d& ray, double& out_dist, path_segment*& out_seg)
-    {
-        return pathseg_tree.ray_first_hit(ray, 
-            [](const ray2d& ray, path_segment* cand, double& out_dist, const param_range& t_range, double eps)
-            {
-                if (cand->way->type != WAY_TYPE_STREET) {
-                    return false;
-                }
-                // check if footpath and street are somewhat parallel
-                double angle_bw = min_angle_between(ray.dir, cand->end.vert - cand->start.vert);
-                if (std::abs(glm::degrees(angle_bw) - 90.0) > 45.0) {
-                    return false;
-                }
-
-                segment ray_seg = {
-                    ray.origin + (t_range.min * ray.dir),
-                    ray.origin + (t_range.max * ray.dir)
-                };
-                segment cand_seg = { cand->start.vert, cand->end.vert };
-
-                seg_inter_result inter_res;
-                if (segments_intersect(ray_seg, cand_seg, inter_res, eps)) {
-                    out_dist = glm::length(inter_res.point - ray.origin);
-                    return true;
-                }
-                else { return false; }
-            },
-            out_dist, out_seg, { .min = 0.0, .max = 25.0 });
-    };
-
-    street_outlines_map_t<const way_net::path*, std::vector<path_segment*>> street_outlines;
-
-    for (auto& fseg : footpath_segs)
-    {
-        glm::dvec2 seg_vec = fseg.end.vert - fseg.start.vert;
-        glm::dvec2 seg_perp_dir = glm::normalize(vec_perp(seg_vec));
-
-        double seg_length = glm::length(seg_vec);
-        // todo: check if seg_length is a perfect divisor of 5.0
-        int num_rays = std::max(1, int(seg_length / 5.0)) + 1;
-
-        for (int i = 0; i < num_rays; ++i)
-        {
-            ray2d ray{
-                .origin = fseg.start.vert + (double(i) / num_rays) * seg_vec,
-                .dir = seg_perp_dir
-            };
-
-            // shoot a ray in the perpendicular direction
-            // if in the same direction, the street hit changes as I sweep through the footpath segment,
-            // cut the footpath segment at that point. The cut cannot be done here since the aabb_tree
-            // would be invalidated, so the cut info needs to be stored 
-            // maybe I don't need to cut the footpath segment, but rather just add additional points
-            // in between that can be used to draw the street outlines, that way no additional footpath segs need to be added
-            // and the footpath segment can be used as is
-
-            // street_outlines can be a map of street paths to a vector of footpath segment pieces (pieces are generated from cuts)
-        }
-        
-        
-
-        double ray1_inter_dist;
-        path_segment* ray1_inter_seg = nullptr;
-        shoot_ray(ray, ray1_inter_dist, ray1_inter_seg);
-
-        ray.dir = -ray.dir;
-        double ray2_inter_dist;
-        path_segment* ray2_inter_seg = nullptr;
-        shoot_ray(ray, ray2_inter_dist, ray2_inter_seg);
-
-        // add the footpath segment to the street outlines map
-        if (ray1_inter_seg) {
-            street_outlines[ray1_inter_seg->parent].push_back(&fseg);
-        }
-        if (ray2_inter_seg) {
-            street_outlines[ray2_inter_seg->parent].push_back(&fseg);
-        }
-    }
+    
 
 }
 
@@ -379,22 +438,22 @@ bool mesh_builder::gen_street_drawdata(std::vector<draw_datad>& drawdata, const 
 
     constexpr double eps = 1e-9;
 
-    std::vector<path_with_segments> footpaths, streets;
+    std::vector<way_net::path> footpaths, streets;
     for (auto nodeitr = network.nodes.begin(); nodeitr != network.nodes.end(); ++nodeitr)
     {
         auto node_paths = get_all_paths_bw_intersections(network, nodeitr);
         for (auto& path : node_paths) 
         {
             if (path.type == WAY_TYPE_FOOTWAY) {
-                footpaths.push_back({ .net_path = std::move(path) });
+                footpaths.push_back(std::move(path));
             }
             else if (path.type == WAY_TYPE_STREET) {
-                streets.push_back({ .net_path = std::move(path) });
+                streets.push_back(std::move(path));
             }
         }
     }
 
-    auto street_outlines_map = gen_street_outlines(footpaths, streets, eps);
+    gen_street_outlines(footpaths, streets, eps);
 
 
 
@@ -410,7 +469,7 @@ bool mesh_builder::gen_street_drawdata(std::vector<draw_datad>& drawdata, const 
     // for each footpath, generate drawdata
     for (const auto& footpath : footpaths)
     {
-        gen_path_drawdata(footpath_dd, footpath.net_path, eps);
+        gen_path_drawdata(footpath_dd, footpath, eps);
     }
 
     for (auto outline_itr = street_outlines_map.begin(); 

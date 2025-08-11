@@ -32,15 +32,6 @@ struct way_network_traits
 template <typename TWay>
 struct way_network
 {
-#ifdef NDEBUG
-    template <typename ...Args> using set_t = boost::container::flat_set<Args...>;
-    template <typename ...Args> using map_t = boost::unordered::unordered_flat_map<Args...>;
-#else
-    // easier to debug with VS
-    template <typename ...Args> using set_t = std::set<Args...>;
-    template <typename ...Args> using map_t = std::unordered_map<Args...>;
-#endif
-
     using traits = way_network_traits<TWay>;
 
     struct node
@@ -49,7 +40,7 @@ struct way_network
         // Edge duplication is possible if two ways share segments, so use a set.
         // Two edges can also have the same way if a way loops back to 
         // its starting node.
-        set_t<osmium::object_id_type> adj_node_ids;
+        types::flat_set<osmium::object_id_type> adj_node_ids;
     };
 
     struct edge
@@ -80,8 +71,8 @@ struct way_network
         }
     };
 
-    map_t<osmium::object_id_type, node> nodes;
-    map_t<edge_idpair, edge, edge_idpair_hash, edge_idpair_equals> edges;
+    types::unord_flat_map<osmium::object_id_type, node> nodes;
+    types::unord_flat_map<edge_idpair, edge, edge_idpair_hash, edge_idpair_equals> edges;
 
     using node_itr = decltype(nodes)::iterator;
     using edge_itr = decltype(edges)::iterator;

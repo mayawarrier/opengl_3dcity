@@ -8,7 +8,40 @@
 #include <osmium/osm/types.hpp>
 #include <glm/glm.hpp>
 
+#ifdef NDEBUG
+#include <boost/unordered/unordered_flat_map_fwd.hpp>
+#include <boost/container/container_fwd.hpp>
+#else
+#include <unordered_map>
+#include <set>
+#endif
+
 #include "../utils.hpp"
+
+enum way_type
+{
+    WAY_TYPE_UNKNOWN,
+    WAY_TYPE_STREET,
+    WAY_TYPE_FOOTWAY
+};
+
+struct way_node
+{
+    osmium::object_id_type id;
+    glm::dvec2 vert;
+};
+
+namespace types
+{
+#ifdef NDEBUG
+    template <typename ...Args> using unord_flat_map = boost::unordered::unordered_flat_map<Args...>;
+    template <typename ...Args> using flat_set = boost::container::flat_set<Args...>;
+#else
+    // better for debugging
+    template <typename ...Args> using unord_flat_map = std::unordered_map<Args...>; 
+    template <typename ...Args> using flat_set = std::set<Args...>;
+#endif
+}
 
 template <int N>
 struct ray
@@ -16,6 +49,10 @@ struct ray
     using vec_t = glm::vec<N, double>;
     vec_t origin;
     vec_t dir;
+
+    ray reversed_dir() const {
+        return { origin, -dir };
+    }
 };
 
 using ray2d = ray<2>;
@@ -116,17 +153,6 @@ struct draw_data
 using draw_dataf = draw_data<float>;
 using draw_datad = draw_data<double>;
 
-enum way_type
-{
-    WAY_TYPE_UNKNOWN,
-    WAY_TYPE_STREET,
-    WAY_TYPE_FOOTWAY
-};
 
-struct way_node
-{
-    osmium::object_id_type id;
-    glm::dvec2 vert;
-};
 
 #endif
