@@ -331,7 +331,7 @@ bool mesh_builder::gen_building_drawdata(std::vector<draw_datad>& drawdata, aabb
     for (size_t i = 0; i < m_buildings.size(); ++i) {
         tree_ptrs[i] = &m_buildings[i];
     }
-    bldg_tree = aabb_tree<building*>::create_unsafe(tree_ptrs.get(), m_buildings.size());
+    bldg_tree = aabb_tree<building*>::create_unsafe({ tree_ptrs.get(), m_buildings.size() });
 
     std::vector<building_part*> unmapped_parts;
     for (auto& part : m_building_parts)

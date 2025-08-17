@@ -100,10 +100,13 @@ struct way_network
     {
         struct node 
         {
-            way_node info;
+            osmium::object_id_type id;
+            glm::dvec2 vert;
             // way into this node from the previous node,
             // null for the first node in the path
             const TWay* in_way;
+
+            node_ref node_ref() const { return { id, vert }; }
         };
         std::vector<node> nodes;
         way_type type;
@@ -123,10 +126,8 @@ struct way_network
         const TWay* prev_edgeway = nullptr;
 
         path_nodes.push_back({
-            .info = {
-                .id = start_nodeitr->first,
-                .vert = start_nodeitr->second.vert
-            },
+            .id = start_nodeitr->first,
+            .vert = start_nodeitr->second.vert,
             .in_way = nullptr
         });
 
@@ -162,10 +163,8 @@ struct way_network
             }
 
             path_nodes.push_back({
-                .info = {
-                    .id = next_nodeitr->first,
-                    .vert = next_nodeitr->second.vert
-                },
+                .id = next_nodeitr->first,
+                .vert = next_nodeitr->second.vert
                 .in_way = cur_edge.way
             });
 

@@ -18,8 +18,8 @@ struct aabb_tree_traits
 };
 
 // Axis-aligned bounding box tree.
-// T = Assumed to be a pointer type or cheap to copy.
-// Tree does not own the stored objects!
+// Does not own the objects stored, so it is expected that the object type 
+// is a pointer or a cheap-to-copy type that points to the actual data.
 template <typename T>
 class aabb_tree
 {
@@ -44,8 +44,8 @@ public:
     MOVE_ONLY_CLASS(aabb_tree, m_root, nullptr)
 
     // Changes the order of the source array!
-    static aabb_tree create_unsafe(T* objects, size_t num_objects) {
-        return { objects, num_objects };
+    static aabb_tree create_unsafe(std::span<T> objects) {
+        return { objects };
     }
 
     std::vector<T> intersect(const bbox2d& bbox) const
@@ -77,7 +77,7 @@ public:
     }
 
     // \param ray_hits_object_cb
-    // callback of type bool(const ray2d&, const T&, double& out_t, const param_range&, double eps)
+    // callback of type bool(const ray2d&, const T&, double& out_t, param_range, double eps)
     bool ray_first_hit(const ray2d& ray, auto ray_hits_object_cb, 
         double& out_t, T& out_object, const param_range& t_range = {}, double eps = 1e-9) const
     {
@@ -140,8 +140,8 @@ public:
     }
 
 private:
-    aabb_tree(T* objects, size_t num_objects) :
-        m_root(make_tree(objects, num_objects))
+    aabb_tree(std::span<T> objects) :
+        m_root(make_tree(objects.data(), objects.size()))
     {}
 
     static node* make_tree(T* objects, size_t num_objects)
