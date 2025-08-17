@@ -164,7 +164,7 @@ struct way_network
 
             path_nodes.push_back({
                 .id = next_nodeitr->first,
-                .vert = next_nodeitr->second.vert
+                .vert = next_nodeitr->second.vert,
                 .in_way = cur_edge.way
             });
 
