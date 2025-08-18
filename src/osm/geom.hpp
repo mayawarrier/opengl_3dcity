@@ -108,7 +108,7 @@ bool polygon_covered_by(std::span<const glm::dvec2> inner_polygon, std::span<con
 
 // Triangulate polygon.
 // Input and output are clockwise oriented.
-// \param reverse_orient Reverse orientation of input vertices.
+// \param reverse_orient Reverse orientation of input vertices. If true,the returned indices will use reversed vertex order! to be fixed
 std::vector<uint32_t> polygon_triangulate(std::span<const glm::dvec2> polygon, bool reverse_orient = false);
 
 // Triangulate a thick polyline.

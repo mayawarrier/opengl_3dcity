@@ -49,9 +49,10 @@ int main(int argc, char* argv[])
     glPrimitiveRestartIndex(std::numeric_limits<uint32_t>::max());
 
     bool DRAW_WIREFRAME = true;
+    bool DRAW_TRIANGLES = true;
 
     osm_data osmdata;
-    if (!read_osmfile("assets/maps/testmap.osm", osmdata)) {
+    if (!read_osmfile("assets/maps/testmap_larger.osm", osmdata)) {
         logERROR("Failed to read OSM map file");
         return -1;
     }
@@ -235,9 +236,11 @@ int main(int argc, char* argv[])
         {
             for (const auto& colr_range: osmdata.color_ranges)
             {
-                glUniform4f(color_loc, colr_range.color.r, colr_range.color.g, colr_range.color.b, colr_range.color.a);
-
-                glDrawElements(GL_TRIANGLES, colr_range.count * 3, GL_UNSIGNED_INT, (void*)(colr_range.startidx * sizeof(uint32_t) * 3));
+                if (DRAW_TRIANGLES) 
+                {
+                    glUniform4f(color_loc, colr_range.color.r, colr_range.color.g, colr_range.color.b, colr_range.color.a);
+                    glDrawElements(GL_TRIANGLES, colr_range.count * 3, GL_UNSIGNED_INT, (void*)(colr_range.startidx * sizeof(uint32_t) * 3));
+                }
 
                 if (DRAW_WIREFRAME)
                 {
