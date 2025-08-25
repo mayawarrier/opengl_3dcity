@@ -122,7 +122,7 @@ bool read_file(const fs::path& path, std::unique_ptr<char[]>& out_data, size_t& 
         return false;
     }
 
-    auto filesize = fs::file_size(path);
+    uintmax_t filesize = fs::file_size(path);
     if (!std::in_range<size_t>(filesize)) {
         logERROR("File %s is too large", path.string().c_str());
         return false;

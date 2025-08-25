@@ -319,4 +319,18 @@ private:
     bool m_ok;
 };
 
+template <class R, class P>
+inline std::string time_str(tim::duration<R, P> time)
+{
+    if (time > tim::seconds(5)) {
+        return std::to_string(tim::duration_cast<tim::seconds>(time).count()) + "s";
+    } else if (time > tim::milliseconds(5)) {
+        return std::to_string(tim::duration_cast<tim::milliseconds>(time).count()) + "ms";
+    } else if (time > tim::microseconds(5)) {
+        return std::to_string(tim::duration_cast<tim::microseconds>(time).count()) + "us";
+    } else {
+        return std::to_string(tim::duration_cast<tim::nanoseconds>(time).count()) + "ns";
+    }
+}
+
 #endif

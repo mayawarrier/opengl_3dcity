@@ -167,36 +167,25 @@ struct path_seg
     bbox2d bbox;
     const mesh_builder::highway* way;
 
-    // This can be used to join the outlines at the end
-    // need the prev and next segments in the path
-    // endid of the segment is the startid of the _next_ segment
-    // startid of the segment is the endid of the _previous_ segment
-    // this can be used to determine correct direction when joining pieces
-    const way_net::path* parent_path;
-    const path_seg* prev_seg;
-    const path_seg* next_seg;
+    const way_net::path* path;
+    const path_seg* prev;
+    const path_seg* next;
 
-    std::vector<int> piece_ids;
+    std::vector<size_t> piece_ids;
 };
 
-// A piece of the segment that can 
-struct path_segpiece
+struct outline_node
 {
-    // instead of start and end of the segment, I now have several
-    // pieces per path segment. I need to join them together
-    // somehow to create the final joined outline. How do I deal with holes?
-    // Forget holes for now, assume I get a continuous set of pieces per path segment
-    // and map the streets to the pieces.
-    // I need to join the pieces somehow. Joining only happens at the start and end of the segment.
-    // If I use an ID instead of start and end, I can use the ID to join the pieces together.
-    // I have to ensure that pieces at segment endpoints have the same start and end IDs if the segments are adjacent.
+    // -1 if point is generated and not an OSM node.
+    osmium::object_id_type id;
+    glm::dvec2 vert;
 
-    glm::dvec2 start, end;
-    // If not -1, piece starts or ends at segment node with this id
-    osmium::object_id_type startid, endid;
-    const path_seg* parent_seg;
+    outline_node() = default;
+
+    outline_node(const osm_node& n) : 
+        id(n.id), vert(n.vert)
+    {}
 };
-
 
 template <>
 struct aabb_tree_traits<path_seg*>
@@ -232,9 +221,9 @@ static std::vector<dynarray<path_seg>> get_path_segments(const std::vector<way_n
                 .end = end.osm_node(),
                 .bbox = bbox,
                 .way = end.in_way,
-                .parent_path = &path,
-                .prev_seg = i > 0 ? &segments.ptr[i - 1] : nullptr,
-                .next_seg = i < segments.size - 1 ? &segments.ptr[i + 1] : nullptr
+                .path = &path,
+                .prev = i > 0 ? &segments.ptr[i - 1] : nullptr,
+                .next = i < segments.size - 1 ? &segments.ptr[i + 1] : nullptr
             };
         }      
         ret.push_back(std::move(segments));
@@ -302,15 +291,7 @@ static bool ray_street_hit(const ray2d& ray, const path_seg* src_seg,
 // some footpaths are at different heights than the street! These should be ignored or drawn appropriately
 // some footpaths obscure other footpaths, so I need to check if the footpath is obscured by a building or another footpath
 
-struct st_outline_node
-{
-    // -1 if point is generated and not an OSM node
-    osmium::object_id_type id;
-    glm::dvec2 vert;
-};
-
-using street_pieces_t = types::unord_flat_map<const way_net::path*, std::vector<int>>;
-using street_outlines_t = types::unord_flat_map<const way_net::path*, std::vector<st_outline_node>>;
+using street_outlines_t = types::unord_flat_map<const way_net::path*, std::vector<outline_node>>;
 
 static street_outlines_t gen_street_outlines(const std::vector<way_net::path>& footpaths, 
     const std::vector<way_net::path>& streets, const aabb_tree<mesh_builder::building*>& bldg_tree, double eps)
@@ -331,8 +312,6 @@ static street_outlines_t gen_street_outlines(const std::vector<way_net::path>& f
         seg_tree = aabb_tree<path_seg*>::create_unsafe(tree_objects);
     }
 
-    static constexpr double RAY_FIRE_INTERVAL = 5.0; // meters
-
     std::pmr::pool_options opts;
     opts.max_blocks_per_chunk = 2;
     opts.largest_required_pool_block = 0;
@@ -341,7 +320,15 @@ static street_outlines_t gen_street_outlines(const std::vector<way_net::path>& f
     std::pmr::polymorphic_allocator<ray_hit> rayhit_alloc { &pool };
     std::pmr::polymorphic_allocator<glm::dvec2> rayorig_alloc { &pool };
 
-    street_outlines_t street_outlines;
+    struct outline_piece
+    {
+        outline_node start, end;
+        const path_seg* seg;
+        bool joined = false;
+    };
+
+    std::vector<outline_piece> pieces;
+    types::unord_flat_map<const way_net::path*, types::flat_set<int>> street_piece_ids;
 
     auto add_outline_pieces = [&](path_seg& seg, std::span<const glm::dvec2> ray_origins, glm::dvec2 ray_dir)
     {
@@ -364,32 +351,35 @@ static street_outlines_t gen_street_outlines(const std::vector<way_net::path>& f
             }
             size_t pc_endidx = pc_startidx + 1;
             while (pc_endidx < num_rays && ray_hits[pc_endidx].seg &&
-                ray_hits[pc_endidx].seg->parent_path == ray_hits[pc_startidx].seg->parent_path) {
+                ray_hits[pc_endidx].seg->path == ray_hits[pc_startidx].seg->path) {
                 pc_endidx++;
             }
 
             if (pc_startidx < num_rays)
             {
-                path_segpiece piece;
-                piece.parent_seg = &seg;
+                outline_piece piece;
+                piece.seg = &seg;
 
                 if (pc_startidx == 0) {
-                    piece.start = seg.start.vert;
-                    piece.startid = seg.start.id;
+                    piece.start = seg.start;
                 } else {
-                    piece.start = segment_idx_mid(ray_origins, pc_startidx - 1, pc_startidx);
-                    piece.startid = -1;
+                    piece.start.id = -1;
+                    piece.start.vert = segment_idx_mid(ray_origins, pc_startidx - 1, pc_startidx);
                 }
                 if (pc_endidx == num_rays) {
-                    piece.end = seg.end.vert;
-                    piece.endid = seg.end.id;
+                    piece.end = seg.end;
                 } else {
-                    piece.end = segment_idx_mid(ray_origins, pc_endidx - 1, pc_endidx);
-                    piece.endid = -1;
+                    piece.end.id = -1;
+                    piece.end.vert = segment_idx_mid(ray_origins, pc_endidx - 1, pc_endidx);
                 }
 
-                const auto* hit_path = ray_hits[pc_startidx].seg->parent_path;
-                street_outlines[hit_path].pieces.push_back(piece);
+                size_t piece_id = pieces.size();
+                const auto* hit_street = ray_hits[pc_startidx].seg->path;
+
+                pieces.push_back(piece);
+
+                seg.piece_ids.push_back(piece_id);
+                street_piece_ids[hit_street].insert(piece_id);
             }
 
             rayidx = pc_endidx;
@@ -398,9 +388,11 @@ static street_outlines_t gen_street_outlines(const std::vector<way_net::path>& f
         rayhit_alloc.deallocate(ray_hits, num_rays);
     };
 
-    for (auto& per_path_segs : footpath_segments)
+    static constexpr double RAY_FIRE_INTERVAL = 5.0; // meters
+
+    for (auto& per_fpath_segs : footpath_segments)
     {
-        for (auto& fseg : per_path_segs.span())
+        for (auto& fseg : per_fpath_segs.span())
         {
             glm::dvec2 seg_vec = fseg.end.vert - fseg.start.vert;
             glm::dvec2 seg_perp_dir = glm::normalize(vec_perp(seg_vec));
@@ -420,129 +412,74 @@ static street_outlines_t gen_street_outlines(const std::vector<way_net::path>& f
         }
     }
 
-    // The way to improve this algorithm is as follows:
-    // - For each piece, get the path segment it was created from
-    // - Each piece can be in the middle of a segment, at its start, its end, or at both ends.
-    // - I know the previous and next segment.
-    // - From the previous and next segment, I can get the pieces adjacent to the current piece.
-    // - Pieces are always added in order, so the last piece of the previous segment connects to the first piece of the current segment
-    // - I can keep collecting pieces until I reach a generated point (id -1) or a piece that doesn't hit the same street path.
-    // 
-    // generate the outlines from the pieces by joining them together
-
-    for (auto& [street, outline_entry] : street_outlines)
+    street_outlines_t ret;
+    for (auto& [street, st_piece_ids] : street_piece_ids)
     {
-        while (true) {
+        std::vector<std::vector<outline_node>> outlines;
 
-
-
-
-            for (size_t i = 0; i < outline_entry.pieces.size(); ++i)
-            {
-                auto& piece = outline_entry.pieces[i];
-                if (piece.startid == -1 && piece.endid == -1) {
-                    // this piece is not connected to any segment, skip it
-                    continue;
-                }
-                // if the startid is not -1, it means this piece starts at a segment node
-                // if the endid is not -1, it means this piece ends at a segment node
-                if (piece.startid != -1 && piece.endid != -1) {
-                    // this piece is a full segment, no need to join it with anything
-                    continue;
-                }
-                // if the startid is -1, it means this piece starts in the middle of a segment
-                // if the endid is -1, it means this piece ends in the middle of a segment
-                // I need to find the next piece that connects to this one and join them together
-                size_t next_i = i + 1;
-                while (next_i < outline_entry.pieces.size() &&
-                    outline_entry.pieces[next_i].startid == -1 &&
-                    outline_entry.pieces[next_i].endid == -1) {
-                    next_i++;
-                }
-                if (next_i < outline_entry.pieces.size()) {
-                    // found a next piece that connects to this one
-                    auto& next_piece = outline_entry.pieces[next_i];
-                    if (piece.endid == next_piece.startid || piece.endid == next_piece.endid) {
-                        // join them together
-                        piece.end = next_piece.end;
-                        piece.endid = next_piece.endid;
-                        outline_entry.pieces.erase(outline_entry.pieces.begin() + next_i);
-                        continue; // restart from the beginning of the loop
-                    }
-                }
-            }
-        }
-    }
-
-
-    for (auto& [street, outline_entry] : street_outlines)
-    {
-        auto& pieces = outline_entry.pieces;
-
-        std::vector<std::vector<std::pair<osmium::object_id_type, glm::dvec2>>> outlines;
-        std::vector<bool> seg_used(pieces.size(), false);
-
-        for (size_t i = 0; i < pieces.size(); ++i)
+        for (auto st_pid : st_piece_ids)
         {
-            if (seg_used[i]) {
+            std::vector<outline_node> outline;
+
+            auto* start_piece = &pieces[st_pid];
+            if (start_piece->joined) {
                 continue;
             }
-            std::vector<std::pair<osmium::object_id_type, glm::dvec2>> outline;
 
-            outline.push_back({ pieces[i].startid, pieces[i].start });
-            outline.push_back({ pieces[i].endid, pieces[i].end });
-
-            seg_used[i] = true;
-
-            bool extended = true;
-            while (extended)
+            // extend outline backwards
+            auto* cur_piece = start_piece;
+            while (true)
             {
-                extended = false;
-                // try to extend at the back
-                for (size_t j = 0; j < pieces.size(); ++j)
-                {
-                    if (seg_used[j]) {
-                        continue;
-                    }
-                    if (pieces[j].startid == outline.back().first && outline.back().first != -1) {
-                        outline.push_back({ pieces[j].endid, pieces[j].end });
-                        seg_used[j] = true;
-                        extended = true;
-                        break;
-                    }
-                    else if (pieces[j].endid == outline.back().first && outline.back().first != -1) {
-                        outline.push_back({ pieces[j].startid, pieces[j].start });
-                        seg_used[j] = true;
-                        extended = true;
-                        break;
-                    }
+                auto* prev_seg = cur_piece->seg->prev;
+                if (cur_piece->start.id == -1 || !prev_seg || prev_seg->piece_ids.empty()) {
+                    break;
                 }
-
-                if (extended) {
-                    continue;
+                size_t prev_piece_id = prev_seg->piece_ids.back();
+                if (!st_piece_ids.contains(prev_piece_id)) {
+                    break; // street is different
                 }
-
-                // try to extend at the front
-                for (size_t j = 0; j < pieces.size(); ++j)
-                {
-                    if (seg_used[j]) {
-                        continue;
-                    }
-                    if (pieces[j].endid == outline.front().first && outline.front().first != -1) {
-                        outline.insert(outline.begin(), { pieces[j].startid, pieces[j].start });
-                        seg_used[j] = true;
-                        extended = true;
-                        break;
-                    }
-                    else if (pieces[j].startid == outline.front().first && outline.front().first != -1) {
-                        outline.insert(outline.begin(), { pieces[j].endid, pieces[j].end });
-                        seg_used[j] = true;
-                        extended = true;
-                        break;
-                    }
+                auto* prev_piece = &pieces[prev_piece_id];
+                if (prev_piece->end.id != cur_piece->start.id) {
+                    break;
                 }
+                cur_piece = prev_piece;
             }
 
+            while (cur_piece != start_piece)
+            {
+                outline.push_back(cur_piece->start);
+
+                cur_piece->joined = true;
+                cur_piece = &pieces[cur_piece->seg->next->piece_ids.front()];
+
+                // every middle piece should be a complete segment
+                assert(cur_piece == start_piece || 
+                    (cur_piece->seg->piece_ids.size() == 1 && 
+                        cur_piece->start.id != -1 && cur_piece->end.id != -1));
+            }
+
+            // extend outline forwards
+            while (true)
+            {
+                outline.push_back(cur_piece->start);
+                cur_piece->joined = true;
+
+                auto* next_seg = cur_piece->seg->next;
+                if (cur_piece->end.id == -1 || !next_seg || next_seg->piece_ids.empty()) {
+                    break;
+                }
+                size_t next_piece_id = next_seg->piece_ids.front();
+                if (!st_piece_ids.contains(next_piece_id)) {
+                    break; // street is different
+                }
+                auto* next_piece = &pieces[next_piece_id];
+                if (next_piece->start.id != cur_piece->end.id) {
+                    break;
+                }
+                cur_piece = next_piece;
+            }
+            outline.push_back(cur_piece->end);
+            
             outlines.push_back(std::move(outline));
         }
 
@@ -561,25 +498,25 @@ static street_outlines_t gen_street_outlines(const std::vector<way_net::path>& f
                     if (i == j) continue;
 
                     // check all possible pairs of endpoints
-                    double d1 = vec_sqlength(outlines[i].back().second - outlines[j].front().second);
+                    double d1 = vec_sqlength(outlines[i].back().vert - outlines[j].front().vert);
                     if (d1 < min_dist) {
                         min_dist = d1;
                         best_i = i; best_j = j;
                         reverse_i = false; reverse_j = false;
                     }
-                    double d2 = vec_sqlength(outlines[i].back().second - outlines[j].back().second);
+                    double d2 = vec_sqlength(outlines[i].back().vert - outlines[j].back().vert);
                     if (d2 < min_dist) {
                         min_dist = d2;
                         best_i = i; best_j = j;
                         reverse_i = false; reverse_j = true;
                     }
-                    double d3 = vec_sqlength(outlines[i].front().second - outlines[j].front().second);
+                    double d3 = vec_sqlength(outlines[i].front().vert - outlines[j].front().vert);
                     if (d3 < min_dist) {
                         min_dist = d3;
                         best_i = i; best_j = j;
                         reverse_i = true; reverse_j = false;
                     }
-                    double d4 = vec_sqlength(outlines[i].front().second - outlines[j].back().second);
+                    double d4 = vec_sqlength(outlines[i].front().vert - outlines[j].back().vert);
                     if (d4 < min_dist) {
                         min_dist = d4;
                         best_i = i; best_j = j;
@@ -598,10 +535,10 @@ static street_outlines_t gen_street_outlines(const std::vector<way_net::path>& f
             outlines.erase(outlines.begin() + best_j);
         }
 
-        outline_entry.outline = std::move(outlines[0]);
+        ret[street] = std::move(outlines[0]);
     }
 
-    return street_outlines;
+    return ret;
 }
 
 static void gen_path_drawdata(draw_datad& dd, const way_net::path& path, double eps)
@@ -617,6 +554,8 @@ static void gen_path_drawdata(draw_datad& dd, const way_net::path& path, double 
 
 bool mesh_builder::gen_street_drawdata(std::vector<draw_datad>& drawdata, const aabb_tree<building*>& bldg_tree)
 {
+    auto tbegin = clk::now();
+
     way_net network;
 
     for (const auto& way : m_highways)
@@ -682,22 +621,19 @@ bool mesh_builder::gen_street_drawdata(std::vector<draw_datad>& drawdata, const 
     for (auto outline_itr = street_outlines_map.begin(); 
          outline_itr != street_outlines_map.end(); ++outline_itr)
     {
-        if (std::find_if(outline_itr->first->nodes.begin(), outline_itr->first->nodes.end(),
-            [](auto& n) { return n.id == 1801247228; }) != outline_itr->first->nodes.end())
-        {
-            logMESSAGE("Found street node with id 1801247228");
-        }
+        //if (std::find_if(outline_itr->first->nodes.begin(), outline_itr->first->nodes.end(),
+        //    [](auto& n) { return n.id == 1801247228; }) != outline_itr->first->nodes.end())
+        //{
+        //    logMESSAGE("Found street node with id 1801247228");
+        //}
 
-        auto& joined_outline = outline_itr->second.outline;
+        auto& joined_outline = outline_itr->second;
 
-        if (joined_outline.size() < 3) {
-            continue; // skip outlines with less than 3 points
-        }
         // triangulate the joined outline
         std::vector<glm::dvec2> joined_outline_verts;
         joined_outline_verts.reserve(joined_outline.size());
-        for (const auto& point : joined_outline) {
-            joined_outline_verts.push_back(point.second);
+        for (const auto& node : joined_outline) {
+            joined_outline_verts.push_back(node.vert);
         }
 
         auto joined_orient = polygon_orient(joined_outline_verts);
@@ -727,13 +663,13 @@ bool mesh_builder::gen_street_drawdata(std::vector<draw_datad>& drawdata, const 
         //    debug_dd.add_triangle(0, 1, 2);
         //}
         //else {
-            uint32_t vert_startidx = uint32_t(street_dd.num_verts());
-            for (const auto& point : joined_outline_verts) {
-                street_dd.add_vertex(point.x, point.y, 0.0);
-            }
-            for (size_t i = 0; i < tri_indices.size(); i += 3) {
-                street_dd.add_triangle_w_offset(tri_indices[i], tri_indices[i + 1], tri_indices[i + 2], vert_startidx);
-            }
+        uint32_t vert_startidx = uint32_t(street_dd.num_verts());
+        for (const auto& point : joined_outline_verts) {
+            street_dd.add_vertex(point.x, point.y, 0.0);
+        }
+        for (size_t i = 0; i < tri_indices.size(); i += 3) {
+            street_dd.add_triangle_w_offset(tri_indices[i], tri_indices[i + 1], tri_indices[i + 2], vert_startidx);
+        }
         //}
     }
 
@@ -748,6 +684,10 @@ bool mesh_builder::gen_street_drawdata(std::vector<draw_datad>& drawdata, const 
     drawdata.push_back(std::move(footpath_dd));
     drawdata.push_back(std::move(street_dd));
     //drawdata.push_back(std::move(debug_dd));
+
+    auto tend = clk::now();
+
+    logMESSAGE("Street gen took: %s", time_str(tend - tbegin).c_str());
 
     return true;
 }
