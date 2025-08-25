@@ -5,8 +5,8 @@
 #include <boost/unordered/unordered_flat_map.hpp>
 #include <boost/container/flat_set.hpp>
 #else
-#include <set>
 #include <unordered_map>
+#include <set>
 #endif
 
 #include <boost/functional/hash.hpp>
@@ -106,13 +106,16 @@ struct way_network
             // null for the first node in the path
             const TWay* in_way;
 
-            node_ref node_ref() const { return { id, vert }; }
+            osm_node osm_node() const noexcept { 
+                return { id, vert }; 
+            }
         };
         std::vector<node> nodes;
         way_type type;
     };
 
     // Collect path to the nearest intersection.
+    // Marks edges as visited along the way.
     // \param nodeitr - iterator to starting node
     // \param adj_nodeid - id of adjacent node to start collecting from
     bool path_to_intersection(node_itr start_nodeitr, osmium::object_id_type adj_nodeid, path& out_path)

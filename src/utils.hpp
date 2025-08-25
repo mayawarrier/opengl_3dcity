@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <charconv>
 #include <chrono>
+#include <span>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -18,41 +19,11 @@
 
 #include <SDL.h>
 
-namespace fs = std::filesystem;
-namespace tim = std::chrono;
-
-using clk = tim::steady_clock;
-using uint = unsigned int;
-
-struct size
-{
-    int width, height;
-};
-
-// Defer static_asserts until instantiation time
-template <typename...>
-struct deferred_false : std::false_type {};
-
 #define CONCAT(x, y) x##y
 #define STR(a) #a
 #define XSTR(a) STR(a)
 
 #define NS_PER_MS 1000000
-
-#define MOVE_ONLY_CLASS(classname, handlename, handlenull)           \
-    classname(const classname&) = delete;                            \
-    classname& operator=(const classname&) = delete;                 \
-                                                                     \
-    classname(classname&& rhs) noexcept :                            \
-        handlename(std::exchange(rhs.handlename, handlenull))        \
-    {}                                                               \
-    classname& operator=(classname&& rhs) noexcept {                 \
-        if (this != &rhs) {                                          \
-            handlename = std::exchange(rhs.handlename, handlenull);  \
-        }                                                            \
-        return *this;                                                \
-    }                                                                \
-    bool ok() const noexcept { return handlename != handlenull; }
 
 // Bogus warnings
 #ifdef __clang__
@@ -70,6 +41,37 @@ struct deferred_false : std::false_type {};
 #define POP_WARNINGS
 #define IGNORE_WFORMAT_SECURITY
 #endif
+
+namespace fs = std::filesystem;
+namespace tim = std::chrono;
+
+using clk = tim::steady_clock;
+using uint = unsigned int;
+
+struct size
+{
+    int width, height;
+};
+
+// Defer static_asserts until instantiation time
+template <typename...>
+struct deferred_false : std::false_type {};
+
+#define MOVE_ONLY_CLASS(classname, handlename, handlenull)           \
+    classname(const classname&) = delete;                            \
+    classname& operator=(const classname&) = delete;                 \
+                                                                     \
+    classname(classname&& rhs) noexcept :                            \
+        handlename(std::exchange(rhs.handlename, handlenull))        \
+    {}                                                               \
+    classname& operator=(classname&& rhs) noexcept {                 \
+        if (this != &rhs) {                                          \
+            handlename = std::exchange(rhs.handlename, handlenull);  \
+        }                                                            \
+        return *this;                                                \
+    }                                                                \
+    bool ok() const noexcept { return handlename != handlenull; }
+
 
 // this only works if NDEBUG is defined in Release mode
 // (default for CMake)
@@ -92,10 +94,6 @@ using file_ptr = std::unique_ptr<std::FILE, int(*)(std::FILE*)>;
 #define SAFE_FOPEN(fname, mode) SAFE_FOPENA(fname, mode)
 #endif
 
-// Protect a malloc'd pointer.
-using malloc_ptr = std::unique_ptr<void, void(*)(void*)>;
-inline malloc_ptr make_malloc_ptr(void* ptr) { return { ptr, std::free }; }
-
 
 bool log_init(const char* logfile);
 
@@ -104,7 +102,7 @@ void logWARNING(const char* fmt, ...);
 void logMESSAGE(const char* fmt, ...);
 
 #ifdef NDEBUG
-#define assert_msg(cond, fmt, ...)
+#define assert_msg(cond, fmt, ...) ((void)0)
 #else
 void do_assert_msg(const char* expr, const char* file, int line, const char* fmt, ...);
 
@@ -117,8 +115,30 @@ void do_assert_msg(const char* expr, const char* file, int line, const char* fmt
 #endif
 
 
+template <typename T>
+struct dynarray
+{
+    std::unique_ptr<T[]> ptr;
+    size_t size;
+
+    dynarray() : ptr(nullptr), size(0) {}
+
+    dynarray(size_t size) : 
+        ptr(std::make_unique<T[]>(size)), size(size)
+    {}
+    
+    dynarray(std::unique_ptr<T[]>&& ptr, size_t size) : 
+        ptr(std::move(ptr)), size(size)
+    {}
+
+    std::span<T> span() const noexcept { 
+        return { ptr.get(), size }; 
+    }
+};
+
 // Read file contents.
-bool read_file(const fs::path& path, std::unique_ptr<char[]>& filedata, size_t& filesize);
+bool read_file(const fs::path& path, std::unique_ptr<char[]>& out_data, size_t& out_size);
+bool read_file(const fs::path& path, dynarray<char>& out_data);
 
 
 // this has good codegen

@@ -114,21 +114,35 @@ void do_assert_msg(const char* expr, const char* file, int line, const char* fmt
 }
 #endif
 
-bool read_file(const fs::path& path, std::unique_ptr<char[]>& filedata, size_t& filesize)
+bool read_file(const fs::path& path, std::unique_ptr<char[]>& out_data, size_t& out_size)
 {
     file_ptr file = SAFE_FOPEN(path.c_str(), "rb");
     if (!file) {
         logERROR("Could not open file %s", path.string().c_str());
         return false;
     }
-    filesize = size_t(fs::file_size(path));
-    filedata = std::make_unique<char[]>(filesize);
 
-    if (std::fread(filedata.get(), 1, filesize, file.get()) != filesize) {
+    auto filesize = fs::file_size(path);
+    if (!std::in_range<size_t>(filesize)) {
+        logERROR("File %s is too large", path.string().c_str());
+        return false;
+    }
+
+    auto bufsize = size_t(filesize);
+    auto buf = std::make_unique<char[]>(bufsize);
+
+    if (std::fread(buf.get(), 1, bufsize, file.get()) != bufsize) {
         logERROR("Could not read from file %s", path.string().c_str());
         return false;
     }
+    out_data = std::move(buf);
+    out_size = bufsize;
     return true;
+}
+
+bool read_file(const fs::path& path, dynarray<char>& out_data)
+{
+    return read_file(path, out_data.ptr, out_data.size);
 }
 
 static std::string_view trim(std::string_view str)

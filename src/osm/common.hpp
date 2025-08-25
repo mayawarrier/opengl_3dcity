@@ -25,7 +25,7 @@ enum way_type
     WAY_TYPE_FOOTWAY
 };
 
-struct node_ref
+struct osm_node
 {
     osmium::object_id_type id;
     glm::dvec2 vert;
@@ -53,7 +53,7 @@ struct ray
     ray reversed() const {
         return { origin, -dir };
     }
-    vec_t at_param(double t) const {
+    vec_t at_point(double t) const {
         return origin + t * dir;
     }
 };

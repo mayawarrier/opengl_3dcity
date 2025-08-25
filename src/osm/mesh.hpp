@@ -68,7 +68,7 @@ public:
         osmium::object_id_type id;
         std::string name;
         way_type type;
-        std::vector<node_ref> nodes;
+        std::vector<osm_node> nodes;
         double width;
     };
 

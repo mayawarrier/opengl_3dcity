@@ -18,7 +18,7 @@ struct aabb_tree_traits
 };
 
 // Axis-aligned bounding box tree.
-// Does not own the objects stored, so it is expected that the object type 
+// Does not own the objects stored. It is expected that the object type 
 // is a pointer or a cheap-to-copy type that points to the actual data.
 template <typename T>
 class aabb_tree
@@ -79,7 +79,7 @@ public:
     // \param ray_hits_object_cb
     // callback of type bool(const ray2d&, const T&, double& out_t, param_range, double eps)
     bool ray_first_hit(const ray2d& ray, auto ray_hits_object_cb, 
-        double& out_t, T& out_object, const param_range& t_range = {}, double eps = 1e-9) const
+        double& out_t, T& out_object, param_range t_range = {}, double eps = 1e-9) const
     {
         double min_hit_t = std::numeric_limits<double>::infinity();
         T* min_hit_object = nullptr;
@@ -169,7 +169,7 @@ private:
             int longest_dim = dim_sizes.x > dim_sizes.y ? 0 : 1;
 
             std::sort(objects, objects + num_objects,
-                [&longest_dim](const T& lhs, const T& rhs) 
+                [&](const T& lhs, const T& rhs) 
                 {
                     double lhs_dim = traits::bbox(lhs).center()[longest_dim];
                     double rhs_dim = traits::bbox(rhs).center()[longest_dim];

@@ -11,13 +11,17 @@
 
 static bool gl_load_shader(const fs::path& path, GLenum shader_type, unsigned& out_shader)
 {
-    size_t filesize;
-    std::unique_ptr<char[]> filedata;
-    if (!read_file(path, filedata, filesize)) {
+    dynarray<char> filedata;
+    if (!read_file(path, filedata)) {
         return false;
     }
-    const char* shader_src = filedata.get();
-    const int shader_srclen = int(filesize);
+    if (!std::in_range<int>(filedata.size)) {
+        logERROR("Shader file %s is too large", path.string().c_str());
+        return false;
+    }
+    
+    const char* shader_src = filedata.ptr.get();
+    const int shader_srclen = int(filedata.size);
 
     unsigned shader = glCreateShader(shader_type);
     glShaderSource(shader, 1, &shader_src, &shader_srclen);
