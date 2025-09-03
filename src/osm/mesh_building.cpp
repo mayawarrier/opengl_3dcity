@@ -161,25 +161,25 @@ private:
     std::vector<typename cgalmesh<Kernel>::Vertex_index> m_vmap;
 };
 
+static inline void mesh_add_triangle(auto& mesh, glm::u32vec3 indices, bool reverse_winding)
+{
+    if (reverse_winding) {
+        mesh.add_triangle(indices[0], indices[2], indices[1]);
+    } else {
+        mesh.add_triangle(indices[0], indices[1], indices[2]);
+    }
+}
+
 static uint32_t mesh_add_polygon(auto& mesh,
     std::span<const glm::dvec2> verts,
     std::span<const uint32_t> indices,
     double height,
-    bool reverse_vertices = false,
     bool reverse_winding = false)
 {
     uint32_t vert_startidx = uint32_t(mesh.num_verts());
 
-    if (reverse_vertices) {
-        for (size_t i = 0; i < verts.size(); ++i) {
-            const auto& vert = verts[verts.size() - i - 1];
-            mesh.add_vertex(vert.x, vert.y, height);
-        }
-    }
-    else {
-        for (const auto& vert : verts) {
-            mesh.add_vertex(vert.x, vert.y, height);
-        }
+    for (const auto& vert : verts) {
+        mesh.add_vertex(vert.x, vert.y, height);
     }
 
     for (size_t i = 0; i < indices.size(); i += 3)
@@ -188,22 +188,19 @@ static uint32_t mesh_add_polygon(auto& mesh,
         uint32_t idx1 = indices[i + 1] + vert_startidx;
         uint32_t idx2 = indices[i + 2] + vert_startidx;
 
-        if (reverse_winding) {
-            mesh.add_triangle(idx0, idx2, idx1);
-        } else {
-            mesh.add_triangle(idx0, idx1, idx2);
-        }
+        mesh_add_triangle(mesh, { idx0, idx1, idx2 }, reverse_winding);
     }
     return vert_startidx;
 }
 
 static void gen_building_part_mesh(auto& mesh, const mesh_builder::building_part& part)
 {
-    bool reverse_verts = part.orient == ORIENT_CCW;
-    auto tri_indices = polygon_triangulate(part.verts, reverse_verts);
+    assert(part.orient != ORIENT_COLL);
 
-    uint32_t bot_verts_idx = mesh_add_polygon(mesh, part.verts, tri_indices, part.ht_btm, reverse_verts, true);
-    uint32_t top_verts_idx = mesh_add_polygon(mesh, part.verts, tri_indices, part.ht_top, reverse_verts);
+    auto tri_indices = polygon_triangulate(part.verts, part.orient);
+
+    uint32_t bot_verts_idx = mesh_add_polygon(mesh, part.verts, tri_indices, part.ht_btm, true);
+    uint32_t top_verts_idx = mesh_add_polygon(mesh, part.verts, tri_indices, part.ht_top);
 
     // sides
     for (uint32_t icur = 0; icur < part.verts.size(); ++icur)
@@ -220,8 +217,8 @@ static void gen_building_part_mesh(auto& mesh, const mesh_builder::building_part
         //mesh_add_triangle(mesh, quad[0], quad[3], quad[2]);
         //mesh_add_triangle(mesh, quad[0], quad[1], quad[3]);
 
-        mesh.add_triangle(quad[0], quad[2], quad[3]);
-        mesh.add_triangle(quad[0], quad[3], quad[1]);
+        mesh_add_triangle(mesh, { quad[0], quad[2], quad[3] }, part.orient == ORIENT_CCW);
+        mesh_add_triangle(mesh, { quad[0], quad[3], quad[1] }, part.orient == ORIENT_CCW);
 
         //double o = orient(part.coords[quad[0]],
         //    part.coords[quad[2]],

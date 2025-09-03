@@ -1,6 +1,7 @@
 
 #include <algorithm>
 #include <span>
+#include <array>
 #include <unordered_map>
 #include <iterator>
 
@@ -175,19 +176,6 @@ struct path_seg
     std::vector<int> piece_ids;
 };
 
-struct outline_node
-{
-    // -1 if point is generated and not an OSM node.
-    osmium::object_id_type id;
-    glm::dvec2 vert;
-
-    outline_node() = default;
-
-    outline_node(const osm_node& n) : 
-        id(n.id), vert(n.vert)
-    {}
-};
-
 template <>
 struct aabb_tree_traits<path_seg*>
 {
@@ -291,10 +279,27 @@ static bool ray_street_hit(const ray2d& ray, const path_seg* src_seg,
 // some footpaths are at different heights than the street! These should be ignored or drawn appropriately
 // some footpaths obscure other footpaths, so I need to check if the footpath is obscured by a building or another footpath
 
+struct outline_node
+{
+    // -1 if point is generated and not an OSM node.
+    osmium::object_id_type id;
+    glm::dvec2 vert;
+
+    outline_node() = default;
+
+    outline_node(const osm_node& n) : 
+        id(n.id), vert(n.vert)
+    {}
+};
+
 using street_outlines_t = types::unord_flat_map<const way_net::path*, std::vector<outline_node>>;
 
-static street_outlines_t gen_street_outlines(const std::vector<way_net::path>& footpaths, 
-    const std::vector<way_net::path>& streets, const aabb_tree<mesh_builder::building*>& bldg_tree, double eps)
+static street_outlines_t gen_street_outlines(
+    const std::vector<way_net::path>& footpaths, 
+    const std::vector<way_net::path>& streets, 
+    const aabb_tree<mesh_builder::building*>& bldg_tree, 
+    std::pmr::unsynchronized_pool_resource& mempool,
+    double eps)
 {
     auto footpath_segments = get_path_segments(footpaths);
     auto street_segments = get_path_segments(streets);
@@ -311,8 +316,6 @@ static street_outlines_t gen_street_outlines(const std::vector<way_net::path>& f
         seg_tree = aabb_tree<path_seg*>::create_unsafe(tree_objects);
     }
 
-    std::pmr::unsynchronized_pool_resource mempool;
-
     struct outline_piece
     {
         outline_node start, end;
@@ -322,6 +325,9 @@ static street_outlines_t gen_street_outlines(const std::vector<way_net::path>& f
 
     std::vector<outline_piece> pieces;
     types::unord_flat_map<const way_net::path*, types::flat_set<int>> street_piece_ids;
+
+    // note: using allocators directly. okay for now.
+    // if exceptions are thrown, allocations will eventually be released when the pool goes out of scope
     std::pmr::polymorphic_allocator<ray_hit> rayhit_alloc{ &mempool };
     std::pmr::polymorphic_allocator<glm::dvec2> rayorig_alloc{ &mempool };
 
@@ -404,25 +410,10 @@ static street_outlines_t gen_street_outlines(const std::vector<way_net::path>& f
         rayorig_alloc.deallocate(ray_origins, num_rays);
     }
 
-    struct outline
-    {
-        std::pmr::vector<outline_node> nodes;
-        bool joined_first = false;
-        bool joined_last = false;
-    };
-
-    struct outline_joininfo
-    {
-        double dist;
-        uint i, j;
-        bool rev_i, rev_j;
-    };
-    std::pmr::polymorphic_allocator<outline_joininfo> joininfo_alloc{ &mempool };
-
     street_outlines_t ret;
     for (auto& [street, st_piece_ids] : street_piece_ids)
     {
-        std::pmr::vector<outline> outlines(&mempool);
+        std::pmr::vector<std::pmr::vector<outline_node>> outlines(&mempool);
 
         for (auto st_pid : st_piece_ids)
         {
@@ -458,7 +449,7 @@ static street_outlines_t gen_street_outlines(const std::vector<way_net::path>& f
             while (cur_piece != start_piece)
             {
                 cur_piece->joined = true;
-                outline.nodes.push_back(cur_piece->start);
+                outline.push_back(cur_piece->start);
 
                 auto& next_seg = footpath_segments[cur_piece->seg->next_segidx];
                 cur_piece = &pieces[next_seg.piece_ids.front()];
@@ -473,7 +464,7 @@ static street_outlines_t gen_street_outlines(const std::vector<way_net::path>& f
             while (true)
             {
                 cur_piece->joined = true;
-                outline.nodes.push_back(cur_piece->start);
+                outline.push_back(cur_piece->start);
 
                 int next_segidx = cur_piece->seg->next_segidx;
                 auto* next_seg = next_segidx != -1 ? &footpath_segments[next_segidx] : nullptr;
@@ -493,82 +484,53 @@ static street_outlines_t gen_street_outlines(const std::vector<way_net::path>& f
                 cur_piece = next_piece;
             }
 
-            outline.nodes.push_back(cur_piece->end);
+            outline.push_back(cur_piece->end);
         }
-
-        // calculate distance between every pair of IDs, insert into vector along with metadata (reverse_i, reverse_j)
-       // sort vector by distance. extract min elements one by one, These represent the connections that must be made
-       // make the connections.
 
         assert_msg(!outlines.empty(), "No pieces but has outline entry?");
-        assert_msg(std::in_range<ushort>(outlines.size()), "absurd number of outlines");
-        
-        //types::pmr_flat_set<osmium::object_id_type> joined_ids(&mempool);
-        
-        // optimizing this might be pointless since number of outlines is usually small
+        assert_msg(std::in_range<int>(outlines.size()), "num outlines %z is absurd", outlines.size());
 
-        int joininfo_idx = 0;
-        size_t joininfo_size = outlines.size() * outlines.size() * 4;
-        auto* joininfo = joininfo_alloc.allocate(joininfo_size);
-
-        //types::flat_set<osmium::object_id_type> used_ids;
-        for (ushort i = 0; i < outlines.size(); ++i)
+        // this does not scale well (O(n^3) and a lot of copying/reversing), but this
+        // is probably okay since the number of outlines are usually small (2-3).
+        while (outlines.size() > 1)
         {
-            for (ushort j = 0; j < outlines.size(); ++j)
-            {
-                if (i == j) { continue; }
-
-                // check all possible pairs of endpoints
-                double d1 = vec_sqlength(outlines[i].nodes.back().vert - outlines[j].nodes.front().vert);
-                double d2 = vec_sqlength(outlines[i].nodes.back().vert - outlines[j].nodes.back().vert);
-                double d3 = vec_sqlength(outlines[i].nodes.front().vert - outlines[j].nodes.front().vert);
-                double d4 = vec_sqlength(outlines[i].nodes.front().vert - outlines[j].nodes.back().vert);
+            int best_i = -1, best_j = -1;
+            bool reverse_i = false, reverse_j = false;
+            double min_dist = std::numeric_limits<double>::max();
         
-                joininfo[joininfo_idx++] = { .dist = d1, .i = i, .j = j, .rev_i = false, .rev_j = false };
-                joininfo[joininfo_idx++] = { .dist = d2, .i = i, .j = j, .rev_i = false, .rev_j = true };
-                joininfo[joininfo_idx++] = { .dist = d3, .i = i, .j = j, .rev_i = true,  .rev_j = false };
-                joininfo[joininfo_idx++] = { .dist = d4, .i = i, .j = j, .rev_i = true,  .rev_j = true };
+            for (int i = 0; i < int(outlines.size()); ++i) {
+                for (int j = 0; j < int(outlines.size()); ++j)
+                {
+                    if (i == j) { continue; }
+
+                    // check all possible pairs of endpoints
+                    std::array<double, 4> dists = {
+                        vec_sqlength(outlines[i].back().vert - outlines[j].front().vert),
+                        vec_sqlength(outlines[i].back().vert - outlines[j].back().vert),
+                        vec_sqlength(outlines[i].front().vert - outlines[j].front().vert),
+                        vec_sqlength(outlines[i].front().vert - outlines[j].back().vert),
+                    };
+
+                    int min_distidx = int(std::min_element(dists.begin(), dists.end()) - dists.begin());
+                    if (dists[min_distidx] < min_dist) 
+                    {
+                        min_dist = dists[min_distidx];
+                        reverse_i = get_bit(min_distidx, 1); // nasty
+                        reverse_j = get_bit(min_distidx, 0);
+                        best_i = i; best_j = j;
+                    }
+                }
             }
-        }
 
-        std::sort(joininfo, joininfo + joininfo_size,
-            [](auto& lhs, auto& rhs) { return lhs.dist < rhs.dist; });
-
-        for (auto& ji : std::span(joininfo, joininfo_size))
-        {
-            auto& outlineA = outlines[ji.i];
-            auto& outlineB = outlines[ji.j];
-
-            outlineA.joined_last = !ji.rev_i;
-            
-            if (ji.rev_i) { std::reverse(outlineA.nodes.begin(), outlineA.nodes.end()); }
-            if (ji.rev_j) { std::reverse(outlineB.nodes.begin(), outlineB.nodes.end()); }
-            
-            outlineA.nodes.insert(outlineA.nodes.end(), outlineB.nodes.begin(), outlineB.nodes.end());
-            //outline
-            //outlines.erase(outlines.begin() + ji.j);
-        }
+            auto& outlineI = outlines[best_i];
+            auto& outlineJ = outlines[best_j];
         
-        // in every iteration, this is finding the smallest distance between pairs of IDs,
-        // and then repeating the whole process several times. I don't want that.
-        //while (outlines.size() > 1)
-        //{
-        //    size_t best_i = 0, best_j = 0;
-        //    bool reverse_i = false, reverse_j = false;
-        //    double min_dist = std::numeric_limits<double>::max();
-        //
-        //    // Find closest endpoints between any two outlines
-        //    
-        //
-        //    auto& outlineA = outlines[best_i];
-        //    auto& outlineB = outlines[best_j];
-        //
-        //    if (reverse_i) { std::reverse(outlineA.begin(), outlineA.end()); }
-        //    if (reverse_j) { std::reverse(outlineB.begin(), outlineB.end()); }
-        //
-        //    outlineA.insert(outlineA.end(), outlineB.begin(), outlineB.end());
-        //    outlines.erase(outlines.begin() + best_j);
-        //}
+            if (reverse_i) { std::reverse(outlineI.begin(), outlineI.end()); }
+            if (reverse_j) { std::reverse(outlineJ.begin(), outlineJ.end()); }
+        
+            outlineI.insert(outlineI.end(), outlineJ.begin(), outlineJ.end());
+            outlines.erase(outlines.begin() + best_j);
+        }
 
         ret[street] = { outlines[0].begin(), outlines[0].end() };
     }
@@ -631,7 +593,8 @@ bool mesh_builder::gen_street_drawdata(std::vector<draw_datad>& drawdata, const 
         }
     }
 
-    auto street_outlines_map = gen_street_outlines(footpaths, streets, bldg_tree, eps);
+    std::pmr::unsynchronized_pool_resource mempool;
+    auto street_outlines_map = gen_street_outlines(footpaths, streets, bldg_tree, mempool, eps);
 
     draw_datad footpath_dd{ 
         .name = "footpaths",
@@ -653,8 +616,9 @@ bool mesh_builder::gen_street_drawdata(std::vector<draw_datad>& drawdata, const 
         gen_path_drawdata(footpath_dd, footpath, eps);
     }
 
-    for (auto outline_itr = street_outlines_map.begin(); 
-         outline_itr != street_outlines_map.end(); ++outline_itr)
+    //std::pmr::polymorphic_allocator<glm::dvec2> vert_alloc(&mempool);
+
+    for (auto& [street, outline] : street_outlines_map)
     {
         //if (std::find_if(outline_itr->first->nodes.begin(), outline_itr->first->nodes.end(),
         //    [](auto& n) { return n.id == 1801247228; }) != outline_itr->first->nodes.end())
@@ -662,25 +626,26 @@ bool mesh_builder::gen_street_drawdata(std::vector<draw_datad>& drawdata, const 
         //    logMESSAGE("Found street node with id 1801247228");
         //}
 
-        auto& joined_outline = outline_itr->second;
+        //auto* outline_verts_ptr = vert_alloc.allocate(outline.size());
+        auto outline_verts_ptr = std::make_unique<glm::dvec2[]>(outline.size());
 
-        // triangulate the joined outline
-        std::vector<glm::dvec2> joined_outline_verts;
-        joined_outline_verts.reserve(joined_outline.size());
-        for (const auto& node : joined_outline) {
-            joined_outline_verts.push_back(node.vert);
+        std::span outline_verts(outline_verts_ptr.get(), outline.size());
+        for (size_t i = 0; i < outline.size(); ++i) {
+            outline_verts[i] = outline[i].vert;
+        }
+        
+        orient_t outline_orient = polygon_orient(outline_verts);
+        if (outline_orient == ORIENT_COLL) {
+            logMESSAGE("Skipping outline as it has 0 area");
+            //assert(false); // todo: figure out why these are failing
+            //vert_alloc.deallocate(outline_verts_ptr, outline.size());
+            continue;
         }
 
-        auto joined_orient = polygon_orient(joined_outline_verts);
-        if (joined_orient == ORIENT_CCW) {
-            std::reverse(joined_outline_verts.begin(), joined_outline_verts.end());
-            joined_orient = ORIENT_CW; // reverse the orientation to be clockwise
-        }
-
-
-        auto tri_indices = polygon_triangulate(joined_outline_verts, joined_orient == ORIENT_CCW);
+        auto tri_indices = polygon_triangulate(outline_verts, outline_orient);
         if (tri_indices.empty()) {
-            continue; // skip outlines with no triangles
+            //vert_alloc.deallocate(outline_verts_ptr, outline.size());
+            continue;
         }
         
         // 763664859      - 7
@@ -699,12 +664,14 @@ bool mesh_builder::gen_street_drawdata(std::vector<draw_datad>& drawdata, const 
         //}
         //else {
         uint32_t vert_startidx = uint32_t(street_dd.num_verts());
-        for (const auto& point : joined_outline_verts) {
+        for (const auto& point : outline_verts) {
             street_dd.add_vertex(point.x, point.y, 0.0);
         }
         for (size_t i = 0; i < tri_indices.size(); i += 3) {
             street_dd.add_triangle_w_offset(tri_indices[i], tri_indices[i + 1], tri_indices[i + 2], vert_startidx);
         }
+
+        //vert_alloc.deallocate(outline_verts_ptr, outline.size());
         //}
     }
 

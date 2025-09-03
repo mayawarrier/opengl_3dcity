@@ -182,14 +182,22 @@ private:
     const T& m_data;
 };
 
-std::vector<uint32_t> polygon_triangulate(std::span<const glm::dvec2> verts, bool reverse_orient)
+std::vector<uint32_t> polygon_triangulate(std::span<const glm::dvec2> verts, orient_t orient)
 {
-    if (reverse_orient) {
-        std::array<reversed_view<std::span<const glm::dvec2>>, 1> polygon = { { verts } };
-        return mapbox::earcut<uint32_t>(polygon);
-    } else {
+    if (orient == ORIENT_CW) {
         std::array<std::span<const glm::dvec2>, 1> polygon = { { verts } };
         return mapbox::earcut<uint32_t>(polygon);
+    } 
+    else {
+        assert(orient == ORIENT_CCW);
+        // earcut claims to handle CCW polygons properly, but it does not. Make it CW.
+        std::array<reversed_view<std::span<const glm::dvec2>>, 1> polygon = { { verts } };
+
+        auto ret = mapbox::earcut<uint32_t>(polygon);
+        for (auto& idx : ret) {
+            idx = uint32_t(verts.size()) - idx - 1;
+        }
+        return ret;        
     }
 }
 

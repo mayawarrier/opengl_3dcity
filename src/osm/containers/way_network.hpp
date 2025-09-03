@@ -90,7 +90,7 @@ struct way_network
 
     edge_itr add_edge(edge_idpair node_ids, const TWay* way)
     {
-        //assert(!edges.contains(node_ids));
+        //assert(!edges.contains(node_ids)); // todo: check why this fails
 
         edge e = { .way = way, .visited = false };
         return edges.insert({ node_ids, std::move(e) }).first;
