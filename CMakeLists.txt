@@ -30,10 +30,6 @@ if (WIN32)
         "src/win32.cpp")
 endif()
 
-if (CMAKE_GENERATOR MATCHES "Visual Studio")
-    list(APPEND SOURCES "src/cpp.hint")
-endif()
-
 add_executable(3dcity "${SOURCES}")
 
 set_target_properties(3dcity PROPERTIES
@@ -65,6 +61,9 @@ target_include_directories(3dcity PRIVATE ${EARCUT_HPP_INCLUDE_DIRS})
 
 find_package(Boost REQUIRED COMPONENTS geometry)
 target_link_libraries(3dcity PRIVATE Boost::geometry)
+
+find_package(boost_unordered CONFIG REQUIRED)
+target_link_libraries(3dcity PRIVATE Boost::unordered)
 
 find_package(Boost REQUIRED COMPONENTS container)
 target_link_libraries(3dcity PRIVATE Boost::container)

@@ -9,9 +9,10 @@
     "earcut-hpp",
     "boost-geometry",
     {
-      "name": "boost-container",
-      "version>=": "1.88.0"
+        "name": "boost-container",
+        "version>=": "1.88.0"
     },
+    "boost-unordered",
     "cgal",
     "scottt-debugbreak"
   ]

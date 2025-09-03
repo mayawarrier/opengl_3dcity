@@ -36,8 +36,13 @@ namespace types
 #ifdef NDEBUG
     template <typename ...Args> using unord_flat_map = boost::unordered::unordered_flat_map<Args...>;
     template <typename ...Args> using flat_set = boost::container::flat_set<Args...>;
+
+    template <typename Key, typename KeyCompare = std::less<Key>> 
+    using pmr_flat_set = boost::container::flat_set<Key, KeyCompare, std::pmr::vector<Key>>;
 #else
-    // better for debugging
+    // Better for debugging, since boost natvis files are not being picked up.
+    // Copying them into the current dir works, but gitignoring them (even if added 
+    // to the sources in CMake) breaks natvis again. Too much trouble.
     template <typename ...Args> using unord_flat_map = std::unordered_map<Args...>; 
     template <typename ...Args> using flat_set = std::set<Args...>;
 #endif

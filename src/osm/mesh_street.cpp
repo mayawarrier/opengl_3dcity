@@ -9,6 +9,7 @@
 #include <osmium/geom/mercator_projection.hpp>
 
 #include <boost/unordered/unordered_flat_map.hpp>
+#include <boost/container/flat_set.hpp>
 
 #include "containers/way_network.hpp"
 #include "mesh.hpp"
@@ -168,10 +169,10 @@ struct path_seg
     const mesh_builder::highway* way;
 
     const way_net::path* path;
-    const path_seg* prev;
-    const path_seg* next;
+    int prev_segidx;
+    int next_segidx;
 
-    std::vector<size_t> piece_ids;
+    std::vector<int> piece_ids;
 };
 
 struct outline_node
@@ -195,15 +196,15 @@ struct aabb_tree_traits<path_seg*>
     }
 };
 
-static std::vector<dynarray<path_seg>> get_path_segments(const std::vector<way_net::path>& paths)
+static std::vector<path_seg> get_path_segments(const std::vector<way_net::path>& paths)
 {
-    std::vector<dynarray<path_seg>> ret;
+    std::vector<path_seg> ret;
 
     for (auto& path : paths)
     {
         assert_msg(path.nodes.size() >= 2, "bad path");
 
-        dynarray<path_seg> segments(path.nodes.size() - 1);
+        size_t startidx = ret.size();
         for (size_t i = 0; i < path.nodes.size() - 1; ++i)
         {
             auto& start = path.nodes[i];
@@ -213,20 +214,19 @@ static std::vector<dynarray<path_seg>> get_path_segments(const std::vector<way_n
             bbox.extend(start.vert);
             bbox.extend(end.vert);
 
-            // ensure prev_seg/next_seg pointer stability on push_back
-            static_assert(std::is_nothrow_move_constructible_v<decltype(segments)>);
+            int prev_segidx = i > 0 ? int(startidx + i - 1) : -1;
+            int next_segidx = i < path.nodes.size() - 2 ? int(startidx + i + 1) : -1;
 
-            segments.ptr[i] = {
+            ret.push_back({
                 .start = start.osm_node(),
                 .end = end.osm_node(),
                 .bbox = bbox,
                 .way = end.in_way,
                 .path = &path,
-                .prev = i > 0 ? &segments.ptr[i - 1] : nullptr,
-                .next = i < segments.size - 1 ? &segments.ptr[i + 1] : nullptr
-            };
-        }      
-        ret.push_back(std::move(segments));
+                .prev_segidx = prev_segidx,
+                .next_segidx = next_segidx
+            });
+        }
     }
 
     return ret;
@@ -302,23 +302,16 @@ static street_outlines_t gen_street_outlines(const std::vector<way_net::path>& f
     aabb_tree<path_seg*> seg_tree;
     {
         std::vector<path_seg*> tree_objects;
-        for (auto* p : { &footpath_segments, &street_segments }) {
-            for (auto& path_segs : *p) {
-                for (auto& seg : path_segs.span()) {
-                    tree_objects.push_back(&seg);
-                }
-            }
+        for (auto& seg : footpath_segments) {
+            tree_objects.push_back(&seg);
+        }
+        for (auto& seg : street_segments) {
+            tree_objects.push_back(&seg);
         }
         seg_tree = aabb_tree<path_seg*>::create_unsafe(tree_objects);
     }
 
-    std::pmr::pool_options opts;
-    opts.max_blocks_per_chunk = 2;
-    opts.largest_required_pool_block = 0;
-
-    std::pmr::unsynchronized_pool_resource pool{ opts };
-    std::pmr::polymorphic_allocator<ray_hit> rayhit_alloc { &pool };
-    std::pmr::polymorphic_allocator<glm::dvec2> rayorig_alloc { &pool };
+    std::pmr::unsynchronized_pool_resource mempool;
 
     struct outline_piece
     {
@@ -329,6 +322,8 @@ static street_outlines_t gen_street_outlines(const std::vector<way_net::path>& f
 
     std::vector<outline_piece> pieces;
     types::unord_flat_map<const way_net::path*, types::flat_set<int>> street_piece_ids;
+    std::pmr::polymorphic_allocator<ray_hit> rayhit_alloc{ &mempool };
+    std::pmr::polymorphic_allocator<glm::dvec2> rayorig_alloc{ &mempool };
 
     auto add_outline_pieces = [&](path_seg& seg, std::span<const glm::dvec2> ray_origins, glm::dvec2 ray_dir)
     {
@@ -373,10 +368,10 @@ static street_outlines_t gen_street_outlines(const std::vector<way_net::path>& f
                     piece.end.vert = segment_idx_mid(ray_origins, pc_endidx - 1, pc_endidx);
                 }
 
-                size_t piece_id = pieces.size();
-                const auto* hit_street = ray_hits[pc_startidx].seg->path;
-
                 pieces.push_back(piece);
+
+                int piece_id = int(pieces.size() - 1);
+                const auto* hit_street = ray_hits[pc_startidx].seg->path;
 
                 seg.piece_ids.push_back(piece_id);
                 street_piece_ids[hit_street].insert(piece_id);
@@ -390,67 +385,83 @@ static street_outlines_t gen_street_outlines(const std::vector<way_net::path>& f
 
     static constexpr double RAY_FIRE_INTERVAL = 5.0; // meters
 
-    for (auto& per_fpath_segs : footpath_segments)
+    for (auto& fseg : footpath_segments)
     {
-        for (auto& fseg : per_fpath_segs.span())
-        {
-            glm::dvec2 seg_vec = fseg.end.vert - fseg.start.vert;
-            glm::dvec2 seg_perp_dir = glm::normalize(vec_perp(seg_vec));
+        glm::dvec2 seg_vec = fseg.end.vert - fseg.start.vert;
+        glm::dvec2 seg_perp_dir = glm::normalize(vec_perp(seg_vec));
 
-            double seg_length = glm::length(seg_vec);
-            int num_rays = std::max(1, int(std::ceil(seg_length / RAY_FIRE_INTERVAL - eps))) + 1;
+        double seg_length = glm::length(seg_vec);
+        int num_rays = std::max(1, int(std::ceil(seg_length / RAY_FIRE_INTERVAL - eps))) + 1;
 
-            auto ray_origins = rayorig_alloc.allocate(num_rays);
-            for (int i = 0; i < num_rays; ++i) {
-                ray_origins[i] = fseg.start.vert + (double(i) / num_rays) * seg_vec;
-            }
-
-            add_outline_pieces(fseg, { ray_origins, size_t(num_rays) }, seg_perp_dir);
-            add_outline_pieces(fseg, { ray_origins, size_t(num_rays) }, -seg_perp_dir);
-
-            rayorig_alloc.deallocate(ray_origins, num_rays);
+        auto ray_origins = rayorig_alloc.allocate(num_rays);
+        for (int i = 0; i < num_rays; ++i) {
+            ray_origins[i] = fseg.start.vert + (double(i) / num_rays) * seg_vec;
         }
+
+        add_outline_pieces(fseg, { ray_origins, size_t(num_rays) }, seg_perp_dir);
+        add_outline_pieces(fseg, { ray_origins, size_t(num_rays) }, -seg_perp_dir);
+
+        rayorig_alloc.deallocate(ray_origins, num_rays);
     }
+
+    struct outline
+    {
+        std::pmr::vector<outline_node> nodes;
+        bool joined_first = false;
+        bool joined_last = false;
+    };
+
+    struct outline_joininfo
+    {
+        double dist;
+        uint i, j;
+        bool rev_i, rev_j;
+    };
+    std::pmr::polymorphic_allocator<outline_joininfo> joininfo_alloc{ &mempool };
 
     street_outlines_t ret;
     for (auto& [street, st_piece_ids] : street_piece_ids)
     {
-        std::vector<std::vector<outline_node>> outlines;
+        std::pmr::vector<outline> outlines(&mempool);
 
         for (auto st_pid : st_piece_ids)
         {
-            std::vector<outline_node> outline;
-
             auto* start_piece = &pieces[st_pid];
             if (start_piece->joined) {
                 continue;
             }
 
-            // extend outline backwards
+            auto& outline = outlines.emplace_back();
+
+            // go to the start of the piece chain
             auto* cur_piece = start_piece;
             while (true)
             {
-                auto* prev_seg = cur_piece->seg->prev;
+                int prev_segidx = cur_piece->seg->prev_segidx;
+                auto* prev_seg = prev_segidx != -1 ? &footpath_segments[prev_segidx] : nullptr;
+
                 if (cur_piece->start.id == -1 || !prev_seg || prev_seg->piece_ids.empty()) {
                     break;
                 }
-                size_t prev_piece_id = prev_seg->piece_ids.back();
+                int prev_piece_id = prev_seg->piece_ids.back();
                 if (!st_piece_ids.contains(prev_piece_id)) {
-                    break; // street is different
+                    break;
                 }
                 auto* prev_piece = &pieces[prev_piece_id];
                 if (prev_piece->end.id != cur_piece->start.id) {
                     break;
                 }
+
                 cur_piece = prev_piece;
             }
 
             while (cur_piece != start_piece)
             {
-                outline.push_back(cur_piece->start);
-
                 cur_piece->joined = true;
-                cur_piece = &pieces[cur_piece->seg->next->piece_ids.front()];
+                outline.nodes.push_back(cur_piece->start);
+
+                auto& next_seg = footpath_segments[cur_piece->seg->next_segidx];
+                cur_piece = &pieces[next_seg.piece_ids.front()];
 
                 // every middle piece should be a complete segment
                 assert(cur_piece == start_piece || 
@@ -458,84 +469,108 @@ static street_outlines_t gen_street_outlines(const std::vector<way_net::path>& f
                         cur_piece->start.id != -1 && cur_piece->end.id != -1));
             }
 
-            // extend outline forwards
+            // extend chain forwards
             while (true)
             {
-                outline.push_back(cur_piece->start);
                 cur_piece->joined = true;
+                outline.nodes.push_back(cur_piece->start);
 
-                auto* next_seg = cur_piece->seg->next;
+                int next_segidx = cur_piece->seg->next_segidx;
+                auto* next_seg = next_segidx != -1 ? &footpath_segments[next_segidx] : nullptr;
+
                 if (cur_piece->end.id == -1 || !next_seg || next_seg->piece_ids.empty()) {
                     break;
                 }
-                size_t next_piece_id = next_seg->piece_ids.front();
+                int next_piece_id = next_seg->piece_ids.front();
                 if (!st_piece_ids.contains(next_piece_id)) {
-                    break; // street is different
+                    break;
                 }
                 auto* next_piece = &pieces[next_piece_id];
                 if (next_piece->start.id != cur_piece->end.id) {
                     break;
                 }
+
                 cur_piece = next_piece;
             }
-            outline.push_back(cur_piece->end);
-            
-            outlines.push_back(std::move(outline));
+
+            outline.nodes.push_back(cur_piece->end);
         }
+
+        // calculate distance between every pair of IDs, insert into vector along with metadata (reverse_i, reverse_j)
+       // sort vector by distance. extract min elements one by one, These represent the connections that must be made
+       // make the connections.
 
         assert_msg(!outlines.empty(), "No pieces but has outline entry?");
-        while (outlines.size() > 1)
+        assert_msg(std::in_range<ushort>(outlines.size()), "absurd number of outlines");
+        
+        //types::pmr_flat_set<osmium::object_id_type> joined_ids(&mempool);
+        
+        // optimizing this might be pointless since number of outlines is usually small
+
+        int joininfo_idx = 0;
+        size_t joininfo_size = outlines.size() * outlines.size() * 4;
+        auto* joininfo = joininfo_alloc.allocate(joininfo_size);
+
+        //types::flat_set<osmium::object_id_type> used_ids;
+        for (ushort i = 0; i < outlines.size(); ++i)
         {
-            size_t best_i = 0, best_j = 0;
-            bool reverse_i = false, reverse_j = false;
-            double min_dist = std::numeric_limits<double>::max();
-
-            // Find closest endpoints between any two outlines
-            for (size_t i = 0; i < outlines.size(); ++i)
+            for (ushort j = 0; j < outlines.size(); ++j)
             {
-                for (size_t j = 0; j < outlines.size(); ++j)
-                {
-                    if (i == j) continue;
+                if (i == j) { continue; }
 
-                    // check all possible pairs of endpoints
-                    double d1 = vec_sqlength(outlines[i].back().vert - outlines[j].front().vert);
-                    if (d1 < min_dist) {
-                        min_dist = d1;
-                        best_i = i; best_j = j;
-                        reverse_i = false; reverse_j = false;
-                    }
-                    double d2 = vec_sqlength(outlines[i].back().vert - outlines[j].back().vert);
-                    if (d2 < min_dist) {
-                        min_dist = d2;
-                        best_i = i; best_j = j;
-                        reverse_i = false; reverse_j = true;
-                    }
-                    double d3 = vec_sqlength(outlines[i].front().vert - outlines[j].front().vert);
-                    if (d3 < min_dist) {
-                        min_dist = d3;
-                        best_i = i; best_j = j;
-                        reverse_i = true; reverse_j = false;
-                    }
-                    double d4 = vec_sqlength(outlines[i].front().vert - outlines[j].back().vert);
-                    if (d4 < min_dist) {
-                        min_dist = d4;
-                        best_i = i; best_j = j;
-                        reverse_i = true; reverse_j = true;
-                    }
-                }
+                // check all possible pairs of endpoints
+                double d1 = vec_sqlength(outlines[i].nodes.back().vert - outlines[j].nodes.front().vert);
+                double d2 = vec_sqlength(outlines[i].nodes.back().vert - outlines[j].nodes.back().vert);
+                double d3 = vec_sqlength(outlines[i].nodes.front().vert - outlines[j].nodes.front().vert);
+                double d4 = vec_sqlength(outlines[i].nodes.front().vert - outlines[j].nodes.back().vert);
+        
+                joininfo[joininfo_idx++] = { .dist = d1, .i = i, .j = j, .rev_i = false, .rev_j = false };
+                joininfo[joininfo_idx++] = { .dist = d2, .i = i, .j = j, .rev_i = false, .rev_j = true };
+                joininfo[joininfo_idx++] = { .dist = d3, .i = i, .j = j, .rev_i = true,  .rev_j = false };
+                joininfo[joininfo_idx++] = { .dist = d4, .i = i, .j = j, .rev_i = true,  .rev_j = true };
             }
-
-            auto& outlineA = outlines[best_i];
-            auto& outlineB = outlines[best_j];
-
-            if (reverse_i) { std::reverse(outlineA.begin(), outlineA.end()); }
-            if (reverse_j) { std::reverse(outlineB.begin(), outlineB.end()); }
-
-            outlineA.insert(outlineA.end(), outlineB.begin(), outlineB.end());
-            outlines.erase(outlines.begin() + best_j);
         }
 
-        ret[street] = std::move(outlines[0]);
+        std::sort(joininfo, joininfo + joininfo_size,
+            [](auto& lhs, auto& rhs) { return lhs.dist < rhs.dist; });
+
+        for (auto& ji : std::span(joininfo, joininfo_size))
+        {
+            auto& outlineA = outlines[ji.i];
+            auto& outlineB = outlines[ji.j];
+
+            outlineA.joined_last = !ji.rev_i;
+            
+            if (ji.rev_i) { std::reverse(outlineA.nodes.begin(), outlineA.nodes.end()); }
+            if (ji.rev_j) { std::reverse(outlineB.nodes.begin(), outlineB.nodes.end()); }
+            
+            outlineA.nodes.insert(outlineA.nodes.end(), outlineB.nodes.begin(), outlineB.nodes.end());
+            //outline
+            //outlines.erase(outlines.begin() + ji.j);
+        }
+        
+        // in every iteration, this is finding the smallest distance between pairs of IDs,
+        // and then repeating the whole process several times. I don't want that.
+        //while (outlines.size() > 1)
+        //{
+        //    size_t best_i = 0, best_j = 0;
+        //    bool reverse_i = false, reverse_j = false;
+        //    double min_dist = std::numeric_limits<double>::max();
+        //
+        //    // Find closest endpoints between any two outlines
+        //    
+        //
+        //    auto& outlineA = outlines[best_i];
+        //    auto& outlineB = outlines[best_j];
+        //
+        //    if (reverse_i) { std::reverse(outlineA.begin(), outlineA.end()); }
+        //    if (reverse_j) { std::reverse(outlineB.begin(), outlineB.end()); }
+        //
+        //    outlineA.insert(outlineA.end(), outlineB.begin(), outlineB.end());
+        //    outlines.erase(outlines.begin() + best_j);
+        //}
+
+        ret[street] = { outlines[0].begin(), outlines[0].end() };
     }
 
     return ret;
