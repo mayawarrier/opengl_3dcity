@@ -14,25 +14,16 @@
 #include <osmium/osm/types.hpp>
 
 #include "../common.hpp"
+#include "fwd.hpp"
 
-
-template <typename TWay>
-struct way_network_traits
-{
-    static_assert(deferred_false<TWay>::value,
-        "way_network_traits must be specialized for the TWay type.");
-
-    static way_type way_type(const TWay* way) {
-        (void)way;
-        return WAY_TYPE_UNKNOWN;
-    }
-};
 
 // A network/graph of OSM ways (streets, footpaths, etc.)
-template <typename TWay>
+template <typename TWay, typename Traits>
 struct way_network
 {
-    using traits = way_network_traits<TWay>;
+    static_assert(requires {
+        { Traits::way_type(std::declval<const TWay*>()) } -> std::same_as<way_type>;
+    }, "Invalid Traits type.");
 
     struct node
     {
@@ -154,8 +145,8 @@ struct way_network
                     can_visit_edge = true;
                 }
                 else {
-                    way_type prev_type = traits::way_type(prev_edgeway);
-                    way_type cur_type = traits::way_type(cur_edge.way);
+                    way_type prev_type = Traits::way_type(prev_edgeway);
+                    way_type cur_type = Traits::way_type(cur_edge.way);
                     assert(prev_type != WAY_TYPE_UNKNOWN && cur_type != WAY_TYPE_UNKNOWN);
 
                     can_visit_edge = (prev_type == cur_type);
@@ -201,7 +192,7 @@ struct way_network
         assert(prev_edgeway);       
         out_path = { 
             .nodes = std::move(path_nodes), 
-            .type = traits::way_type(prev_edgeway)
+            .type = Traits::way_type(prev_edgeway)
         };
         return true;
     }

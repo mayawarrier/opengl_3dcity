@@ -1,26 +1,19 @@
 
-#ifndef AABB_TREE_HPP
-#define AABB_TREE_HPP
+#ifndef OSM_AABB_TREE_HPP
+#define OSM_AABB_TREE_HPP
 
 #include <functional>
+#include <boost/container/small_vector.hpp>
 
 #include "../common.hpp"
 #include "../geom.hpp"
+#include "fwd.hpp"
 
-template <typename T>
-struct aabb_tree_traits
-{
-    static_assert(deferred_false<T>::value,
-        "aabb_tree_traits must be specialized for the type T.");
-
-    bbox2d bb;
-    static const bbox2d& bbox(const T& obj) { (void)obj; return bb; }
-};
 
 // Axis-aligned bounding box tree.
 // Does not own the objects stored. It is expected that the object type 
 // is a pointer or a cheap-to-copy type that points to the actual data.
-template <typename T>
+template <typename T, typename Traits>
 class aabb_tree
 {
 private:
@@ -34,7 +27,9 @@ private:
         T data;
     };
 
-    using traits = aabb_tree_traits<T>;
+    static_assert(requires {
+        { Traits::bbox(std::declval<T>()) } -> std::same_as<const bbox2d&>;
+    }, "Invalid Traits type.");
 
 public:
     aabb_tree() :
@@ -52,7 +47,7 @@ public:
     {
         std::vector<T> ret;
 
-        std::vector<node*> nodes;
+        boost::container::small_vector<node*, 16> nodes;
         auto push_node_if_intersects = [&](node* node) {
             if (node && bbox_intersects_bbox(node->bbox, bbox))
                 nodes.push_back(node);
@@ -76,7 +71,7 @@ public:
         return ret;
     }
 
-    // \param ray_hits_object_cb
+    // \param ray_hits_object_cb -
     // callback of type bool(const ray2d&, const T&, double& out_t, param_range, double eps)
     bool ray_first_hit(const ray2d& ray, auto ray_hits_object_cb, 
         double& out_t, T& out_object, param_range t_range = {}, double eps = 1e-9) const
@@ -84,7 +79,8 @@ public:
         double min_hit_t = std::numeric_limits<double>::infinity();
         T* min_hit_object = nullptr;
 
-        std::vector<node*> nodes;
+        // sufficient for trees with upto 2^16 objects
+        boost::container::small_vector<node*, 16> nodes;
         auto push_node_if_hit = [&](node* node) 
         {
             if (node) {
@@ -154,7 +150,7 @@ private:
             auto* node = new leafnode();
             node->left = nullptr;
             node->right = nullptr;
-            node->bbox = traits::bbox(objects[0]);
+            node->bbox = Traits::bbox(objects[0]);
             node->data = objects[0];
             return node;
         }
@@ -162,7 +158,7 @@ private:
             auto* n = new node();
 
             for (size_t i = 0; i < num_objects; ++i) {
-                n->bbox.extend(traits::bbox(objects[i]));
+                n->bbox.extend(Traits::bbox(objects[i]));
             }
 
             glm::vec2 dim_sizes = n->bbox.max - n->bbox.min;
@@ -171,8 +167,8 @@ private:
             std::sort(objects, objects + num_objects,
                 [&](const T& lhs, const T& rhs) 
                 {
-                    double lhs_dim = traits::bbox(lhs).center()[longest_dim];
-                    double rhs_dim = traits::bbox(rhs).center()[longest_dim];
+                    double lhs_dim = Traits::bbox(lhs).center()[longest_dim];
+                    double rhs_dim = Traits::bbox(rhs).center()[longest_dim];
                     return lhs_dim < rhs_dim;
                 });
 

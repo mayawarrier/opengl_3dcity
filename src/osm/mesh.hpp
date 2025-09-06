@@ -7,9 +7,8 @@
 #include <osmium/osm/types.hpp>
 #include <osmium/fwd.hpp>
 
+#include "containers/fwd.hpp"
 #include "common.hpp"
-#include "containers/aabb_tree.hpp"
-#include "geom.hpp"
 
 
 // Processes OSM data into a set of meshes/lines
@@ -61,6 +60,13 @@ public:
         building_part info;
         std::string name;
         std::vector<building_part*> parts;
+
+        struct aabb_traits
+        {
+            static const bbox2d& bbox(building* building) {
+                return building->info.bbox;
+            }
+        };
     };
 
     struct highway
@@ -70,25 +76,24 @@ public:
         way_type type;
         std::vector<osm_node> nodes;
         double width;
+
+        struct way_net_traits
+        {
+            static way_type way_type(const highway* way) {
+                return way->type;
+            }
+        };
     };
 
 private:
     bool get_building_part(const building_info& info, building_part& part);
 
-    bool gen_building_drawdata(std::vector<draw_datad>& drawdata, aabb_tree<building*>& out_bldg_tree);
-    bool gen_street_drawdata(std::vector<draw_datad>& drawdata, const aabb_tree<building*>& bldg_tree);
+    bool gen_building_drawdata(std::vector<draw_datad>& drawdata, aabb_tree<building*>* out_bldg_tree);
+    bool gen_street_drawdata(std::vector<draw_datad>& drawdata, const aabb_tree<building*>* bldg_tree);
 
     std::vector<building> m_buildings;
     std::vector<building_part> m_building_parts;
     std::vector<highway> m_highways;
-};
-
-template <>
-struct aabb_tree_traits<mesh_builder::building*>
-{
-    static const bbox2d& bbox(mesh_builder::building* building) {
-        return building->info.bbox;
-    }
 };
 
 #endif

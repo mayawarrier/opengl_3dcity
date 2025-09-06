@@ -9,6 +9,7 @@
 #include <osmium/geom/mercator_projection.hpp>
 
 #include "containers/aabb_tree.hpp"
+#include "geom.hpp"
 #include "mesh.hpp"
 
 
@@ -320,10 +321,10 @@ static bool cgalmesh_is_watertight(const cgalmesh<Kernel>& mesh, osmium::object_
     return true;
 }
 
-
-
-bool mesh_builder::gen_building_drawdata(std::vector<draw_datad>& drawdata, aabb_tree<building*>& bldg_tree)
+bool mesh_builder::gen_building_drawdata(std::vector<draw_datad>& drawdata, aabb_tree<building*>* bldg_tree_ptr)
 {
+    auto& bldg_tree = *bldg_tree_ptr;
+
     auto tree_ptrs = std::make_unique_for_overwrite<building*[]>(m_buildings.size());
     for (size_t i = 0; i < m_buildings.size(); ++i) {
         tree_ptrs[i] = &m_buildings[i];

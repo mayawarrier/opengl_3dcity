@@ -11,8 +11,11 @@
 
 #include <boost/unordered/unordered_flat_map.hpp>
 #include <boost/container/flat_set.hpp>
+#include <boost/pool/pool_alloc.hpp>
 
 #include "containers/way_network.hpp"
+#include "containers/aabb_tree.hpp"
+#include "geom.hpp"
 #include "mesh.hpp"
 
 
@@ -98,14 +101,6 @@ bool mesh_builder::add_highway(const highway_info& info)
 
 using way_net = way_network<mesh_builder::highway>;
 
-template <>
-struct way_network_traits<mesh_builder::highway>
-{
-    static way_type way_type(const mesh_builder::highway* way) {
-        return way->type;
-    }
-};
-
 // Get all paths between intersections including this node.
 // Traversing outwards from _all_ nodes instead of just intersections ensures
 // that disconnected components (for eg. racetracks) are not missed.
@@ -174,14 +169,13 @@ struct path_seg
     int next_segidx;
 
     std::vector<int> piece_ids;
-};
 
-template <>
-struct aabb_tree_traits<path_seg*>
-{
-    static const bbox2d& bbox(const path_seg* seg) {
-        return seg->bbox;
-    }
+    struct aabb_traits
+    {
+        static const bbox2d& bbox(const path_seg* seg) {
+            return seg->bbox;
+        }
+    };
 };
 
 static std::vector<path_seg> get_path_segments(const std::vector<way_net::path>& paths)
@@ -227,7 +221,7 @@ struct ray_hit
 };
 
 static bool ray_street_hit(const ray2d& ray, const path_seg* src_seg,
-    const aabb_tree<path_seg*>& seg_tree, const aabb_tree<mesh_builder::building*>& bldg_tree, 
+    const aabb_tree<path_seg*>& seg_tree, const aabb_tree<mesh_builder::building*>& bldg_tree,
     ray_hit& out_hit, double eps)
 {
     auto seg_hit_cb = [&](const ray2d& ray, path_seg* cand_seg, 
@@ -279,6 +273,20 @@ static bool ray_street_hit(const ray2d& ray, const path_seg* src_seg,
 // some footpaths are at different heights than the street! These should be ignored or drawn appropriately
 // some footpaths obscure other footpaths, so I need to check if the footpath is obscured by a building or another footpath
 
+// in order to fill in the street outlines where footpaths are missing,
+// I need to determine not only which street segments are missing footpaths
+// but also for long street segments, I need to break them up into pieces and determine the
+// pieces outside the footpath coverage area. These pieces can then be joined, and
+// polylines offset by half the street width can be drawn as the street outline in
+// these areas. Note that the street extends beyond the footpath coverage area at the
+// endpoints, so these will have to be handled specially.
+
+// need to traverse the street segments, and determine which segments
+// do not intersect any footpath outlines, and cut the street segments accordingly
+// the last intersected footpath outline will be the outline that will be extended 
+// until the end of the street. at the endpoints, need to check the adjacent streets
+// and use that to determine the part that should not be filled in (intersection area)
+
 struct outline_node
 {
     // -1 if point is generated and not an OSM node.
@@ -297,8 +305,7 @@ using street_outlines_t = types::unord_flat_map<const way_net::path*, std::vecto
 static street_outlines_t gen_street_outlines(
     const std::vector<way_net::path>& footpaths, 
     const std::vector<way_net::path>& streets, 
-    const aabb_tree<mesh_builder::building*>& bldg_tree, 
-    std::pmr::unsynchronized_pool_resource& mempool,
+    const aabb_tree<mesh_builder::building*>& bldg_tree,
     double eps)
 {
     auto footpath_segments = get_path_segments(footpaths);
@@ -326,10 +333,8 @@ static street_outlines_t gen_street_outlines(
     std::vector<outline_piece> pieces;
     types::unord_flat_map<const way_net::path*, types::flat_set<int>> street_piece_ids;
 
-    // note: using allocators directly. okay for now.
-    // if exceptions are thrown, allocations will eventually be released when the pool goes out of scope
-    std::pmr::polymorphic_allocator<ray_hit> rayhit_alloc{ &mempool };
-    std::pmr::polymorphic_allocator<glm::dvec2> rayorig_alloc{ &mempool };
+    types::unsync_pool_alloc<ray_hit> rayhit_alloc;
+    types::unsync_pool_alloc<glm::dvec2> rayorig_alloc;
 
     auto add_outline_pieces = [&](path_seg& seg, std::span<const glm::dvec2> ray_origins, glm::dvec2 ray_dir)
     {
@@ -413,7 +418,7 @@ static street_outlines_t gen_street_outlines(
     street_outlines_t ret;
     for (auto& [street, st_piece_ids] : street_piece_ids)
     {
-        std::pmr::vector<std::pmr::vector<outline_node>> outlines(&mempool);
+        boost::container::small_vector<std::vector<outline_node>, 5> outlines;
 
         for (auto st_pid : st_piece_ids)
         {
@@ -490,8 +495,8 @@ static street_outlines_t gen_street_outlines(
         assert_msg(!outlines.empty(), "No pieces but has outline entry?");
         assert_msg(std::in_range<int>(outlines.size()), "num outlines %z is absurd", outlines.size());
 
-        // this does not scale well (O(n^3) and a lot of copying/reversing), but this
-        // is probably okay since the number of outlines are usually small (2-3).
+        // this does not scale well (O(n^3) and a lot of copying/reversing), but
+        // it should be okay as the number of outlines are usually small (2-3).
         while (outlines.size() > 1)
         {
             int best_i = -1, best_j = -1;
@@ -532,7 +537,10 @@ static street_outlines_t gen_street_outlines(
             outlines.erase(outlines.begin() + best_j);
         }
 
-        ret[street] = { outlines[0].begin(), outlines[0].end() };
+        if (outlines[0].size() > 2) {
+            ret[street] = std::move(outlines[0]);
+        }
+        //else assert(false); // todo: check why this fails
     }
 
     return ret;
@@ -549,7 +557,7 @@ static void gen_path_drawdata(draw_datad& dd, const way_net::path& path, double 
     polyline_triangulate(verts, path.nodes[1].in_way->width, dd, eps);
 }
 
-bool mesh_builder::gen_street_drawdata(std::vector<draw_datad>& drawdata, const aabb_tree<building*>& bldg_tree)
+bool mesh_builder::gen_street_drawdata(std::vector<draw_datad>& drawdata, const aabb_tree<building*>* bldg_tree_ptr)
 {
     auto tbegin = clk::now();
 
@@ -593,8 +601,8 @@ bool mesh_builder::gen_street_drawdata(std::vector<draw_datad>& drawdata, const 
         }
     }
 
-    std::pmr::unsynchronized_pool_resource mempool;
-    auto street_outlines_map = gen_street_outlines(footpaths, streets, bldg_tree, mempool, eps);
+    auto& bldg_tree = *bldg_tree_ptr;
+    auto street_outlines_map = gen_street_outlines(footpaths, streets, bldg_tree, eps);
 
     draw_datad footpath_dd{ 
         .name = "footpaths",
@@ -617,6 +625,7 @@ bool mesh_builder::gen_street_drawdata(std::vector<draw_datad>& drawdata, const 
     }
 
     //std::pmr::polymorphic_allocator<glm::dvec2> vert_alloc(&mempool);
+    types::unsync_pool_alloc<glm::dvec2> vert_alloc;
 
     for (auto& [street, outline] : street_outlines_map)
     {
@@ -626,10 +635,10 @@ bool mesh_builder::gen_street_drawdata(std::vector<draw_datad>& drawdata, const 
         //    logMESSAGE("Found street node with id 1801247228");
         //}
 
-        //auto* outline_verts_ptr = vert_alloc.allocate(outline.size());
-        auto outline_verts_ptr = std::make_unique<glm::dvec2[]>(outline.size());
+        auto* outline_verts_ptr = vert_alloc.allocate(outline.size());
+        //auto outline_verts_ptr = std::make_unique<glm::dvec2[]>(outline.size());
 
-        std::span outline_verts(outline_verts_ptr.get(), outline.size());
+        std::span outline_verts(outline_verts_ptr, outline.size());
         for (size_t i = 0; i < outline.size(); ++i) {
             outline_verts[i] = outline[i].vert;
         }
@@ -638,13 +647,13 @@ bool mesh_builder::gen_street_drawdata(std::vector<draw_datad>& drawdata, const 
         if (outline_orient == ORIENT_COLL) {
             logMESSAGE("Skipping outline as it has 0 area");
             //assert(false); // todo: figure out why these are failing
-            //vert_alloc.deallocate(outline_verts_ptr, outline.size());
+            vert_alloc.deallocate(outline_verts_ptr, outline.size());
             continue;
         }
 
         auto tri_indices = polygon_triangulate(outline_verts, outline_orient);
         if (tri_indices.empty()) {
-            //vert_alloc.deallocate(outline_verts_ptr, outline.size());
+            vert_alloc.deallocate(outline_verts_ptr, outline.size());
             continue;
         }
         
@@ -671,15 +680,15 @@ bool mesh_builder::gen_street_drawdata(std::vector<draw_datad>& drawdata, const 
             street_dd.add_triangle_w_offset(tri_indices[i], tri_indices[i + 1], tri_indices[i + 2], vert_startidx);
         }
 
-        //vert_alloc.deallocate(outline_verts_ptr, outline.size());
+        vert_alloc.deallocate(outline_verts_ptr, outline.size());
         //}
     }
 
     for (auto & street : streets)
     {
-        if (!street_outlines_map.contains(&street)) {
+        //if (!street_outlines_map.contains(&street)) {
             gen_path_drawdata(street_dd, street, eps);
-        }
+        //}
         
     }
 

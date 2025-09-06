@@ -16,6 +16,8 @@
 #include <set>
 #endif
 
+#include <boost/pool/poolfwd.hpp>
+
 #include "../utils.hpp"
 
 enum way_type
@@ -23,6 +25,13 @@ enum way_type
     WAY_TYPE_UNKNOWN,
     WAY_TYPE_STREET,
     WAY_TYPE_FOOTWAY
+};
+
+enum orient_t
+{
+    ORIENT_CW = -1,  // clockwise
+    ORIENT_COLL = 0, // collinear
+    ORIENT_CCW = 1,  // counter-clockwise
 };
 
 struct osm_node
@@ -36,16 +45,15 @@ namespace types
 #ifdef NDEBUG
     template <typename ...Args> using unord_flat_map = boost::unordered::unordered_flat_map<Args...>;
     template <typename ...Args> using flat_set = boost::container::flat_set<Args...>;
-
-    template <typename Key, typename KeyCompare = std::less<Key>> 
-    using pmr_flat_set = boost::container::flat_set<Key, KeyCompare, std::pmr::vector<Key>>;
 #else
-    // Better for debugging, since boost natvis files are not being picked up.
-    // Copying them into the current dir works, but gitignoring them (even if added 
-    // to the sources in CMake) breaks natvis again. Too much trouble.
+    // Better for debugging. Boost natvis files are not being picked up.
     template <typename ...Args> using unord_flat_map = std::unordered_map<Args...>; 
     template <typename ...Args> using flat_set = std::set<Args...>;
 #endif
+
+    template <typename T>
+    using unsync_pool_alloc = boost::pool_allocator<T, 
+        boost::default_user_allocator_new_delete, boost::details::pool::null_mutex>;
 }
 
 template <int N>

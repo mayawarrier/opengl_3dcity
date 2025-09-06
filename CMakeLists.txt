@@ -12,6 +12,7 @@ set(SOURCES
     "src/viewport.hpp"
     "src/viewport.cpp"
     "src/osm/common.hpp"
+    "src/osm/containers/fwd.hpp"
     "src/osm/containers/way_network.hpp"
     "src/osm/containers/aabb_tree.hpp"
     "src/osm/geom.hpp"
@@ -31,6 +32,10 @@ if (WIN32)
 endif()
 
 add_executable(3dcity "${SOURCES}")
+
+if (MSVC)
+    set_target_properties(3dcity PROPERTIES LINK_FLAGS "/PROFILE")
+endif()
 
 set_target_properties(3dcity PROPERTIES
     CXX_STANDARD 20
@@ -67,6 +72,9 @@ target_link_libraries(3dcity PRIVATE Boost::unordered)
 
 find_package(Boost REQUIRED COMPONENTS container)
 target_link_libraries(3dcity PRIVATE Boost::container)
+
+find_package(boost_pool CONFIG REQUIRED)
+target_link_libraries(3dcity PRIVATE Boost::pool)
 
 find_package(CGAL CONFIG REQUIRED)
 target_link_libraries(3dcity PRIVATE CGAL::CGAL)

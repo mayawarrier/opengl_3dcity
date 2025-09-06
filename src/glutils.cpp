@@ -11,7 +11,7 @@
 
 static bool gl_load_shader(const fs::path& path, GLenum shader_type, unsigned& out_shader)
 {
-    dynarray<char> filedata;
+    buffer<char> filedata;
     if (!read_file(path, filedata)) {
         return false;
     }

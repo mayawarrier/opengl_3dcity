@@ -116,18 +116,18 @@ void do_assert_msg(const char* expr, const char* file, int line, const char* fmt
 
 
 template <typename T>
-struct dynarray
+struct buffer
 {
     std::unique_ptr<T[]> ptr;
     size_t size;
 
-    dynarray() : ptr(nullptr), size(0) {}
+    buffer() : ptr(nullptr), size(0) {}
 
-    dynarray(size_t size) : 
+    buffer(size_t size) : 
         ptr(std::make_unique<T[]>(size)), size(size)
     {}
     
-    dynarray(std::unique_ptr<T[]>&& ptr, size_t size) : 
+    buffer(std::unique_ptr<T[]>&& ptr, size_t size) : 
         ptr(std::move(ptr)), size(size)
     {}
 
@@ -138,7 +138,7 @@ struct dynarray
 
 // Read file contents.
 bool read_file(const fs::path& path, std::unique_ptr<char[]>& out_data, size_t& out_size);
-bool read_file(const fs::path& path, dynarray<char>& out_data);
+bool read_file(const fs::path& path, buffer<char>& out_data);
 
 
 // this has good codegen

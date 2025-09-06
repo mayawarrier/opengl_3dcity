@@ -75,13 +75,6 @@ double angle_between(glm::dvec2 a, glm::dvec2 b);
 // Get the minimum angle between two vectors (in radians).
 double min_angle_between(glm::dvec2 a, glm::dvec2 b);
 
-enum orient_t
-{
-    ORIENT_CW = -1,  // clockwise
-    ORIENT_COLL = 0, // collinear
-    ORIENT_CCW = 1,  // counter-clockwise
-};
-
 inline orient_t classify_orient(double value)
 {
     if (value > 0) {

@@ -140,7 +140,7 @@ bool read_file(const fs::path& path, std::unique_ptr<char[]>& out_data, size_t& 
     return true;
 }
 
-bool read_file(const fs::path& path, dynarray<char>& out_data)
+bool read_file(const fs::path& path, buffer<char>& out_data)
 {
     return read_file(path, out_data.ptr, out_data.size);
 }
