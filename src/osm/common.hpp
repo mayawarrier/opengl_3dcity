@@ -74,6 +74,8 @@ struct ray
 using ray2d = ray<2>;
 using ray3d = ray<3>;
 
+// Range of parameter t along a ray. These values may be infinite. 
+// Do not perform arithmetic with them without checking first.
 struct param_range
 {
     double min = 0.0;

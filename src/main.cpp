@@ -39,6 +39,12 @@ int main(int argc, char* argv[])
         return -1;
     }
 
+    osm_data osmdata;
+    if (!read_osmfile("assets/maps/testmap_larger.osm", osmdata)) {
+        logERROR("Failed to read OSM map file");
+        return -1;
+    }
+
     window wnd("MAIN_WINDOW", "3D City", { 900, 750 });
     if (!wnd.ok()) {
         return -1;
@@ -50,24 +56,6 @@ int main(int argc, char* argv[])
 
     bool DRAW_WIREFRAME = true;
     bool DRAW_TRIANGLES = true;
-
-    osm_data osmdata;
-    if (!read_osmfile("assets/maps/testmap_larger.osm", osmdata)) {
-        logERROR("Failed to read OSM map file");
-        return -1;
-    }
-
-    // add some sample points for testing
-    //osm_datahandler osmdata;
-    //osmdata.node_coords.push_back(0.0f);
-    //osmdata.node_coords.push_back(0.0f);
-    //osmdata.node_coords.push_back(0.0f);
-    //osmdata.node_coords.push_back(100.0f);
-    //osmdata.node_coords.push_back(100.0f);
-    //osmdata.node_coords.push_back(0.0f);
-    //osmdata.node_coords.push_back(-100.0f);
-    //osmdata.node_coords.push_back(-100.0f);
-    //osmdata.node_coords.push_back(0.f);
 
     shaderfile::info shader_stages[2] = {
         { "assets/shaders/vertex.vert", GL_VERTEX_SHADER },

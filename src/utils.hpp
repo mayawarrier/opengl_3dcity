@@ -114,6 +114,10 @@ void do_assert_msg(const char* expr, const char* file, int line, const char* fmt
     } while (0)
 #endif
 
+struct buffer_overwrite_t {
+    explicit buffer_overwrite_t() = default;
+};
+inline constexpr buffer_overwrite_t buffer_overwrite{};
 
 template <typename T>
 struct buffer
@@ -125,6 +129,10 @@ struct buffer
 
     buffer(size_t size) : 
         ptr(std::make_unique<T[]>(size)), size(size)
+    {}
+
+    buffer(size_t size, buffer_overwrite_t) :
+        ptr(std::make_unique_for_overwrite<T[]>(size)), size(size)
     {}
     
     buffer(std::unique_ptr<T[]>&& ptr, size_t size) : 

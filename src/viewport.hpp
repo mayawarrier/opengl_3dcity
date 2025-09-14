@@ -28,7 +28,7 @@ public:
 
     bool ok() const { return this->m_window && this->m_glcontext; }
 
-    const char* name() const { return m_name; }
+    std::string_view name() const { return m_name; }
 
     size size() const {
         ::size s;
@@ -50,7 +50,7 @@ private:
     void cleanup() noexcept;
 
 private:
-    const char* m_name;
+    std::string m_name;
     SDL_Window* m_window;
     SDL_GLContext m_glcontext;
 };

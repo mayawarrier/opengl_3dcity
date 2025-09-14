@@ -34,20 +34,20 @@ bool segments_intersect(const segment& seg1, const segment& seg2, seg_inter_resu
     {
         if (std::abs(numer_t) < eps && std::abs(numer_u) < eps) {
             // proof: equate slope and y-intercept
-            out_result = seg_inter_result(SEG_INTER_COINCIDENT);
+            out_result.type = SEG_INTER_COINCIDENT;
             return true;
         } else {
-            out_result = seg_inter_result(SEG_INTER_PARALLEL);
+            out_result.type = SEG_INTER_PARALLEL;
             return false;
         }
     }
     double t = numer_t / denom;
     double u = numer_u / denom;
     
+    out_result.type = classify_seg_inter_type(t, u);
     out_result.point = a1 + t * (a2 - a1);
     out_result.param_seg1 = t;
     out_result.param_seg2 = u;
-    out_result.type = classify_seg_inter_type(t, u);
     
     return out_result.type == SEG_INTER_INSIDE_BOTH;
 }
@@ -306,10 +306,10 @@ void polyline_triangulate(std::span<const glm::dvec2> polyline, double width, dr
 
         for (size_t i = 1; i < polyline.size() - 1; ++i)
         {
-            glm::dvec2 p0 = (i == 1) ? polyline[0] :
-                segment_mid({ polyline[i - 1], polyline[i] });
-            glm::dvec2 p2 = (i == polyline.size() - 2) ? polyline[i + 1] :
-                segment_mid({ polyline[i], polyline[i + 1] });
+            glm::dvec2 p0 = (i == 1) ? polyline[0] : 
+                ((polyline[i - 1] + polyline[i]) / 2.0);
+            glm::dvec2 p2 = (i == polyline.size() - 2) ? polyline[i + 1] : 
+                ((polyline[i] + polyline[i + 1]) / 2.0);
 
             stitch_edge = corner_triangulate(p0, polyline[i], p2, stitch_edge, width, dd, eps);
         }

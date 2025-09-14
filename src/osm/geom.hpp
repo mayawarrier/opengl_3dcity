@@ -21,17 +21,6 @@ inline glm::dvec2 vec_perp(glm::dvec2 vec) { return { -vec.y, vec.x }; }
 // Get the squared length of a vector.
 inline double vec_sqlength(glm::dvec2 vec) { return glm::dot(vec, vec); }
 
-// Get the midpoint of a segment.
-inline glm::dvec2 segment_mid(const segment& seg) {
-    return (seg.first + seg.second) / 2.0;
-}
-
-// Get the midpoint of a segment defined by two indices.
-inline glm::dvec2 segment_idx_mid(std::span<const glm::dvec2> points, size_t idx1, size_t idx2) {
-    assert(idx1 < points.size() && idx2 < points.size());
-    return (points[idx1] + points[idx2]) / 2.0;
-}
-
 enum seg_inter_type
 {
     SEG_INTER_PARALLEL,
@@ -44,22 +33,13 @@ enum seg_inter_type
 
 struct seg_inter_result
 {
-    // If type is PARALLEL or COINCIDENT, 
-    // point and params are infinity
+    // If type is PARALLEL or COINCIDENT, point and params are infinity
     seg_inter_type type;
-    glm::dvec2 point;
+    // Intersection point
+    glm::dvec2 point = glm::dvec2(std::numeric_limits<double>::infinity());
     // Parametric coordinates on each segment
-    double param_seg1;
-    double param_seg2;
-
-    seg_inter_result() = default;
-
-    explicit seg_inter_result(seg_inter_type type) :
-        type(type), 
-        point(std::numeric_limits<double>::infinity()),
-        param_seg1(std::numeric_limits<double>::infinity()),
-        param_seg2(std::numeric_limits<double>::infinity())
-    {}
+    double param_seg1 = std::numeric_limits<double>::infinity();
+    double param_seg2 = std::numeric_limits<double>::infinity();
 };
 
 // Intersect two line segments.
