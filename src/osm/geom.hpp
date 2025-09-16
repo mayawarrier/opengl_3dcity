@@ -13,8 +13,6 @@
 #include <glm/gtx/component_wise.hpp> 
 #include <glm/gtc/constants.hpp>
 
-using segment = std::pair<glm::dvec2, glm::dvec2>;
-
 // Get a vector perpendicular to the input i.e. cross(z, vec).
 inline glm::dvec2 vec_perp(glm::dvec2 vec) { return { -vec.y, vec.x }; }
 
@@ -43,11 +41,22 @@ struct seg_inter_result
 };
 
 // Intersect two line segments.
-bool segments_intersect(const segment& seg1, const segment& seg2, seg_inter_result &out_result, double eps = 1e-9);
+bool seg_intersect(const segment& seg1, const segment& seg2, seg_inter_result &out_result, double eps = 1e-9);
 
 // Check for proper intersection of line segments 
 // (i.e. not parallel/coinciding, and not at endpoints).
-bool segments_proper_intersect(const segment& seg1, const segment& seg2, double eps = 1e-9);
+bool seg_proper_intersect(const segment& seg1, const segment& seg2, double eps = 1e-9);
+
+struct seg_project_result
+{
+    // Projected point.
+    glm::dvec2 proj;
+    // True if point lies on the segment.
+    bool is_inside; 
+};
+
+// Get the projection of a point on a line segment.
+seg_project_result seg_project_point(const segment& seg, glm::dvec2 point);
 
 // Get angle between two vectors (in radians).
 double angle_between(glm::dvec2 a, glm::dvec2 b);

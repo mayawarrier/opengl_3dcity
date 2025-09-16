@@ -21,7 +21,7 @@ static inline seg_inter_type classify_seg_inter_type(double param1, double param
 }
 
 // https://en.wikipedia.org/wiki/Line%E2%80%93line_intersection
-bool segments_intersect(const segment& seg1, const segment& seg2, seg_inter_result& out_result, double eps)
+bool seg_intersect(const segment& seg1, const segment& seg2, seg_inter_result& out_result, double eps)
 {
     const glm::dvec2& a1 = seg1.first, &a2 = seg1.second;
     const glm::dvec2& b1 = seg2.first, &b2 = seg2.second;
@@ -52,10 +52,10 @@ bool segments_intersect(const segment& seg1, const segment& seg2, seg_inter_resu
     return out_result.type == SEG_INTER_INSIDE_BOTH;
 }
 
-bool segments_proper_intersect(const segment& seg1, const segment& seg2, double eps)
+bool seg_proper_intersect(const segment& seg1, const segment& seg2, double eps)
 {
     seg_inter_result result;
-    segments_intersect(seg1, seg2, result, eps);
+    seg_intersect(seg1, seg2, result, eps);
 
     if (result.type == SEG_INTER_PARALLEL || result.type == SEG_INTER_COINCIDENT) {
         return false;
@@ -64,6 +64,18 @@ bool segments_proper_intersect(const segment& seg1, const segment& seg2, double 
     double u = result.param_seg2;
     // exclude endpoints
     return (t > eps) && (t < 1.0 - eps) && (u > eps) && (u < 1.0 - eps);
+}
+
+seg_project_result seg_project_point(const segment& seg, glm::dvec2 point)
+{
+    glm::dvec2 ap = point - seg.first;
+    glm::dvec2 ab = seg.second - seg.first;
+    double t = glm::dot(ap, ab) / glm::dot(ab, ab);
+
+    return {
+        .proj = seg.first + t * ab,
+        .is_inside = t >= 0 && t <= 1
+    };
 }
 
 bool polygon_covered_by(std::span<const glm::dvec2> inner, std::span<const glm::dvec2> outer)
@@ -98,7 +110,7 @@ bool polygon_covered_by(std::span<const glm::dvec2> inner, std::span<const glm::
             segment segA{ outer[icurA], outer[inextA] };
             segment segB{ inner[icurB], inner[inextB] };
 
-            if (segments_proper_intersect(segA, segB)) {
+            if (seg_proper_intersect(segA, segB)) {
                 return false;
             }
         }
@@ -244,7 +256,7 @@ static stitch_edge corner_triangulate(glm::dvec2 p0, glm::dvec2 p1, glm::dvec2 p
     glm::dvec2 outer_p1_seg1 = p1 + norm1, outer_p1_seg2 = p1 + norm2;
 
     seg_inter_result inter_result;
-    segments_intersect({ outer_p0, outer_p1_seg1 }, { outer_p2, outer_p1_seg2 }, inter_result, eps);
+    seg_intersect({ outer_p0, outer_p1_seg1 }, { outer_p2, outer_p1_seg2 }, inter_result, eps);
 
     glm::dvec2 norm_mid = inter_result.point - p1;
     glm::dvec2 inner_mid = p1 - norm_mid, outer_mid = inter_result.point;

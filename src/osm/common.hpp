@@ -34,6 +34,12 @@ enum orient_t
     ORIENT_CCW = 1,  // counter-clockwise
 };
 
+enum direction
+{
+    DIR_LEFT,
+    DIR_RIGHT
+};
+
 struct osm_node
 {
     osmium::object_id_type id;
@@ -55,6 +61,8 @@ namespace types
     using unsync_pool_alloc = boost::pool_allocator<T, 
         boost::default_user_allocator_new_delete, boost::details::pool::null_mutex>;
 }
+
+using segment = std::pair<glm::dvec2, glm::dvec2>;
 
 template <int N>
 struct ray
