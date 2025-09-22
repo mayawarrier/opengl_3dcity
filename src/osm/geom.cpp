@@ -27,12 +27,12 @@ bool seg_intersect(const segment& seg1, const segment& seg2, seg_inter_result& o
     const glm::dvec2& b1 = seg2.first, &b2 = seg2.second;
 
     double denom = (a1.x - a2.x) * (b1.y - b2.y) - (a1.y - a2.y) * (b1.x - b2.x);
-    double numer_t = ((a1.x - b1.x) * (b1.y - b2.y) - (a1.y - b1.y) * (b1.x - b2.x));
-    double numer_u = ((a1.y - a2.y) * (a1.x - b1.x) - (a1.x - a2.x) * (a1.y - b1.y));
+    double t_numer = ((a1.x - b1.x) * (b1.y - b2.y) - (a1.y - b1.y) * (b1.x - b2.x));
+    double u_numer = ((a1.y - a2.y) * (a1.x - b1.x) - (a1.x - a2.x) * (a1.y - b1.y));
 
     if (std::abs(denom) < eps) 
     {
-        if (std::abs(numer_t) < eps && std::abs(numer_u) < eps) {
+        if (std::abs(t_numer) < eps && std::abs(u_numer) < eps) {
             // proof: equate slope and y-intercept
             out_result.type = SEG_INTER_COINCIDENT;
             return true;
@@ -41,8 +41,8 @@ bool seg_intersect(const segment& seg1, const segment& seg2, seg_inter_result& o
             return false;
         }
     }
-    double t = numer_t / denom;
-    double u = numer_u / denom;
+    double t = t_numer / denom;
+    double u = u_numer / denom;
     
     out_result.type = classify_seg_inter_type(t, u);
     out_result.point = a1 + t * (a2 - a1);
@@ -124,9 +124,20 @@ double angle_between(glm::dvec2 a, glm::dvec2 b)
     return std::acos(std::clamp(cos_theta, -1.0, 1.0));
 }
 
+double angle_between_norms(glm::dvec2 a, glm::dvec2 b)
+{
+    return std::acos(std::clamp(glm::dot(a, b), -1.0, 1.0));
+}
+
 double min_angle_between(glm::dvec2 a, glm::dvec2 b)
 {
     double angle = angle_between(a, b);
+    return std::min(angle, glm::two_pi<double>() - angle);
+}
+
+double min_angle_between_norms(glm::dvec2 a, glm::dvec2 b)
+{
+    double angle = angle_between_norms(a, b);
     return std::min(angle, glm::two_pi<double>() - angle);
 }
 

@@ -35,7 +35,7 @@ std::vector<draw_datad> mesh_builder::get_draw_data()
     aabb_tree<building*> bldg_tree;
 
     std::vector<draw_datad> ret;
-    gen_building_drawdata(ret, &bldg_tree);
+    //gen_building_drawdata(ret, &bldg_tree);
     gen_street_drawdata(ret, &bldg_tree);
 
     bbox3d bbox = center_drawdata_batch(ret);

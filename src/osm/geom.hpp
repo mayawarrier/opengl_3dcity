@@ -61,8 +61,14 @@ seg_project_result seg_project_point(const segment& seg, glm::dvec2 point);
 // Get angle between two vectors (in radians).
 double angle_between(glm::dvec2 a, glm::dvec2 b);
 
+// Get angle between two normalized vectors (in radians).
+double angle_between_norms(glm::dvec2 a, glm::dvec2 b);
+
 // Get the minimum angle between two vectors (in radians).
 double min_angle_between(glm::dvec2 a, glm::dvec2 b);
+
+// Get minimum angle between two normalized vectors (in radians).
+double min_angle_between_norms(glm::dvec2 a, glm::dvec2 b);
 
 inline orient_t classify_orient(double value)
 {
