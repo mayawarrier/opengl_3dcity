@@ -47,7 +47,7 @@ public:
     {
         std::vector<T> ret;
 
-        boost::container::small_vector<node*, 16> nodes;
+        types::small_vector<node*, 16> nodes;
         auto push_node_if_intersects = [&](node* node) {
             if (node && bbox_intersects_bbox(node->bbox, bbox))
                 nodes.push_back(node);
@@ -80,7 +80,7 @@ public:
         T* min_hit_object = nullptr;
 
         // sufficient for trees with upto 2^16 objects
-        boost::container::small_vector<node*, 16> nodes;
+        types::small_vector<node*, 16> nodes;
         auto push_node_if_hit = [&](node* node) 
         {
             if (node) {

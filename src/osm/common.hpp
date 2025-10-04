@@ -12,6 +12,7 @@
 #include <boost/unordered/unordered_flat_map_fwd.hpp>
 #include <boost/container/container_fwd.hpp>
 #else
+#include <vector>
 #include <unordered_map>
 #include <set>
 #endif
@@ -37,7 +38,8 @@ enum orient_t
 enum direction
 {
     DIR_LEFT,
-    DIR_RIGHT
+    DIR_RIGHT,
+    DIR_UNDEF
 };
 
 struct osm_node
@@ -48,13 +50,20 @@ struct osm_node
 
 namespace types
 {
+    // Use std library in debug mode because it works with Natvis.
+    // Boost has Natvis support but it's not being picked up.
 #ifdef NDEBUG
     template <typename ...Args> using unord_flat_map = boost::unordered::unordered_flat_map<Args...>;
     template <typename ...Args> using flat_set = boost::container::flat_set<Args...>;
+
+    template <typename T, size_t N, typename ...Args> 
+    using small_vector = boost::container::small_vector<T, N, Args...>;
 #else
-    // Better for debugging. Boost natvis files are not being picked up.
     template <typename ...Args> using unord_flat_map = std::unordered_map<Args...>; 
     template <typename ...Args> using flat_set = std::set<Args...>;
+
+    template <typename T, size_t N, typename ...Args> 
+    using small_vector = std::vector<T>;
 #endif
 
     template <typename T>
