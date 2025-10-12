@@ -14,6 +14,7 @@
 #include <glm/gtc/constants.hpp>
 
 // Get a vector perpendicular to the input i.e. cross(z, vec).
+// Applies a 90 degree CCW rotation.
 inline glm::dvec2 vec_perp(glm::dvec2 vec) { return { -vec.y, vec.x }; }
 
 // Get the squared length of a vector.
@@ -51,24 +52,43 @@ struct seg_project_result
 {
     // Projected point.
     glm::dvec2 proj;
+    // Parametric coordinate on the segment.
+    double proj_param;
     // True if point lies on the segment.
     bool is_inside; 
 };
 
-// Get the projection of a point on a line segment.
+// Get the projection of a point on a segment.
 seg_project_result seg_project_point(const segment& seg, glm::dvec2 point);
 
+// Get point on segment at param t.
+inline glm::dvec2 seg_at_param(const segment& seg, double t) {
+    return seg.first + t * (seg.second - seg.first);
+}
+
+// Get a normal vector to a segment.
+// dir_left = 90 degree CCW, dir_right = 90 degree CW.
+glm::dvec2 seg_normal(const segment& seg, direction dir, double width);
+
 // Get angle between two vectors (in radians).
-double angle_between(glm::dvec2 a, glm::dvec2 b);
+double angle_bw(glm::dvec2 a, glm::dvec2 b);
 
 // Get angle between two normalized vectors (in radians).
-double angle_between_norms(glm::dvec2 a, glm::dvec2 b);
+double angle_bw_unitvecs(glm::dvec2 a, glm::dvec2 b);
 
-// Get the minimum angle between two vectors (in radians).
-double min_angle_between(glm::dvec2 a, glm::dvec2 b);
+// Get minimum angle between two vectors (in radians).
+double min_angle_bw(glm::dvec2 a, glm::dvec2 b);
 
 // Get minimum angle between two normalized vectors (in radians).
-double min_angle_between_norms(glm::dvec2 a, glm::dvec2 b);
+double min_angle_bw_unitvecs(glm::dvec2 a, glm::dvec2 b);
+
+// Get minimum angle between two segments (in radians).
+inline double min_angle_bw_segs(const segment& seg1, const segment& seg2)
+{
+    glm::dvec2 dir1 = seg1.second - seg1.first;
+    glm::dvec2 dir2 = seg2.second - seg2.first;
+    return min_angle_bw(dir1, dir2);
+}
 
 inline orient_t classify_orient(double value)
 {

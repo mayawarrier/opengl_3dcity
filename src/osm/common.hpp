@@ -37,9 +37,9 @@ enum orient_t
 
 enum direction
 {
-    DIR_LEFT,
-    DIR_RIGHT,
-    DIR_UNDEF
+    DIR_UNDEF = -1,
+    DIR_LEFT = 0,
+    DIR_RIGHT = 1,
 };
 
 struct osm_node
@@ -83,7 +83,7 @@ struct ray
     ray reversed() const {
         return { origin, -dir };
     }
-    vec_t at_point(double t) const {
+    vec_t at_param(double t) const {
         return origin + t * dir;
     }
 };

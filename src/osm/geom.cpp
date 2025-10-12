@@ -74,6 +74,7 @@ seg_project_result seg_project_point(const segment& seg, glm::dvec2 point)
 
     return {
         .proj = seg.first + t * ab,
+        .proj_param = t,
         .is_inside = t >= 0 && t <= 1
     };
 }
@@ -118,26 +119,32 @@ bool polygon_covered_by(std::span<const glm::dvec2> inner, std::span<const glm::
     return true;
 }
 
-double angle_between(glm::dvec2 a, glm::dvec2 b)
+glm::dvec2 seg_normal(const segment& seg, direction dir, double width)
+{
+    return (dir == DIR_LEFT ? 1 : -1) * width *
+        glm::normalize(vec_perp(seg.second - seg.first));
+}
+
+double angle_bw(glm::dvec2 a, glm::dvec2 b)
 {
     double cos_theta = glm::dot(a, b) / (glm::length(a) * glm::length(b));
     return std::acos(std::clamp(cos_theta, -1.0, 1.0));
 }
 
-double angle_between_norms(glm::dvec2 a, glm::dvec2 b)
+double angle_bw_unitvecs(glm::dvec2 a, glm::dvec2 b)
 {
     return std::acos(std::clamp(glm::dot(a, b), -1.0, 1.0));
 }
 
-double min_angle_between(glm::dvec2 a, glm::dvec2 b)
+double min_angle_bw(glm::dvec2 a, glm::dvec2 b)
 {
-    double angle = angle_between(a, b);
+    double angle = angle_bw(a, b);
     return std::min(angle, glm::two_pi<double>() - angle);
 }
 
-double min_angle_between_norms(glm::dvec2 a, glm::dvec2 b)
+double min_angle_bw_unitvecs(glm::dvec2 a, glm::dvec2 b)
 {
-    double angle = angle_between_norms(a, b);
+    double angle = angle_bw_unitvecs(a, b);
     return std::min(angle, glm::two_pi<double>() - angle);
 }
 
@@ -291,7 +298,7 @@ static stitch_edge corner_triangulate(glm::dvec2 p0, glm::dvec2 p1, glm::dvec2 p
     uint32_t inner_p2_idx      = dd.add_vertex({ inner_p2,      0.0 });
     uint32_t outer_p2_idx      = dd.add_vertex({ outer_p2,      0.0 });
 
-    bool remove_mid_tri = glm::degrees(angle_between(
+    bool remove_mid_tri = glm::degrees(angle_bw(
         outer_p1_seg2 - inner_mid, outer_p1_seg1 - inner_mid)) < 20.0;
 
     // Segment 1
