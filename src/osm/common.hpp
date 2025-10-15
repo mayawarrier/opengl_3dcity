@@ -91,12 +91,23 @@ struct ray
 using ray2d = ray<2>;
 using ray3d = ray<3>;
 
-// Range of parameter t along a ray. These values may be infinite. 
-// Do not perform arithmetic with them without checking first.
+// Range of parameter t. 
+// These values may be infinite - check before using!
 struct param_range
 {
     double min = 0.0;
     double max = std::numeric_limits<double>::infinity();
+    double min2 = 0.0;
+    double max2 = std::numeric_limits<double>::infinity();
+
+    param_range() = default;
+
+    param_range(double min, double max) : 
+        min(min), max(max) 
+    {
+        min2 = min * min;
+        max2 = max * max;
+    }
 };
 
 // Axis-aligned bounding box.
@@ -167,22 +178,6 @@ struct draw_data
 
     uint32_t num_verts() const { return uint32_t(verts.size() / 3); }
     uint32_t num_tris() const { return uint32_t(tri_indices.size() / 3); }
-
-    draw_data<float> as_float() &&
-    {
-        draw_data<float> result;
-        result.name = std::move(name);
-        result.color = color;
-        result.verts.reserve(verts.size());
-
-        for (size_t i = 0; i < verts.size(); i += 3) {
-            result.verts.push_back(float(verts[i]));
-            result.verts.push_back(float(verts[i + 1]));
-            result.verts.push_back(float(verts[i + 2]));
-        }
-        result.tri_indices = std::move(tri_indices);
-        return result;
-    }
 };
 
 using draw_dataf = draw_data<float>;

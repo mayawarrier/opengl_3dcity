@@ -48,15 +48,17 @@ namespace tim = std::chrono;
 using clk = tim::steady_clock;
 using uint = unsigned int;
 
+template <typename T>
 struct size
 {
-    int width, height;
+    T width, height;
 };
 
 // Defer static_asserts until instantiation time
 template <typename...>
 struct deferred_false : std::false_type {};
 
+// Disable copy and enable move semantics for a class with a single handle member.
 #define MOVE_ONLY_CLASS(classname, handlename, handlenull)           \
     classname(const classname&) = delete;                            \
     classname& operator=(const classname&) = delete;                 \
@@ -94,9 +96,7 @@ using file_ptr = std::unique_ptr<std::FILE, int(*)(std::FILE*)>;
 #define SAFE_FOPEN(fname, mode) SAFE_FOPENA(fname, mode)
 #endif
 
-
 bool log_init(const char* logfile);
-
 void logERROR(const char* fmt, ...);
 void logWARNING(const char* fmt, ...);
 void logMESSAGE(const char* fmt, ...);

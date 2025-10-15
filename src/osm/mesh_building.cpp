@@ -321,7 +321,7 @@ static bool cgalmesh_is_watertight(const cgalmesh<Kernel>& mesh, osmium::object_
     return true;
 }
 
-bool mesh_builder::gen_building_drawdata(std::vector<draw_datad>& drawdata, aabb_tree<building*>* bldg_tree_ptr)
+bool mesh_builder::gen_building_drawdata(std::vector<draw_datad>& drawdata, aabb_tree2d<building*>* bldg_tree_ptr)
 {
     auto& bldg_tree = *bldg_tree_ptr;
     {
@@ -329,7 +329,7 @@ bool mesh_builder::gen_building_drawdata(std::vector<draw_datad>& drawdata, aabb
         for (size_t i = 0; i < m_buildings.size(); ++i) {
             tree_objects.ptr[i] = &m_buildings[i];
         }
-        bldg_tree = aabb_tree<building*>::create_unsafe(tree_objects.span());
+        bldg_tree = aabb_tree2d<building*>::create_unsafe(tree_objects.span());
     }
 
     std::vector<building_part*> unmapped_parts;
@@ -341,7 +341,7 @@ bool mesh_builder::gen_building_drawdata(std::vector<draw_datad>& drawdata, aabb
         }
 
         building* mapped_bldg = nullptr;
-        auto inter_bldgs = bldg_tree.intersect(part.bbox);
+        auto inter_bldgs = bldg_tree.query_bbox_all(part.bbox);
         if (inter_bldgs.empty())
         {
             logWARNING("Part %lld does not intersect any buildings", part.id);

@@ -32,7 +32,7 @@ static bbox3d center_drawdata_batch(std::span<draw_datad> batch)
 
 std::vector<draw_datad> mesh_builder::get_draw_data()
 {
-    aabb_tree<building*> bldg_tree;
+    aabb_tree2d<building*> bldg_tree;
 
     std::vector<draw_datad> ret;
     //gen_building_drawdata(ret, &bldg_tree);

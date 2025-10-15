@@ -16,7 +16,7 @@ public:
     static constexpr fullscreen_t fullscreen;
 
 public:
-    window(const char* name, const char* title, ::size size) :
+    window(const char* name, const char* title, ::size<int> size) :
         window(name, title, size, false)
     {}
 
@@ -30,14 +30,14 @@ public:
 
     std::string_view name() const { return m_name; }
 
-    size size() const {
-        ::size s;
+    size<int> size() const {
+        ::size<int> s;
         SDL_GetWindowSize(m_window, &s.width, &s.height);
         return s;
     }
 
     float aspect_ratio() const {
-        ::size s = size();
+        auto s = size();
         return float(s.width) / s.height;
     }
 
@@ -45,7 +45,7 @@ public:
     void update() { SDL_GL_SwapWindow(this->m_window); }
 
 private:
-    window(const char* name, const char* title, ::size size, bool fullscreen);
+    window(const char* name, const char* title, ::size<int> size, bool fullscreen);
 
     void cleanup() noexcept;
 

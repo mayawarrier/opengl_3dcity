@@ -131,20 +131,21 @@ public:
         osm_data ret;
         for (size_t i = 0; i < batch.size(); ++i) 
         {
-            auto dd_float = std::move(batch[i]).as_float();
+            auto& dd = batch[i];
 
             uint32_t verts_startidx = ret.data.num_verts();
-            ret.data.verts.insert(ret.data.verts.end(), dd_float.verts.begin(), dd_float.verts.end());
-
+            for (double v : dd.verts) {
+                ret.data.verts.push_back(float(v));
+            }
             uint32_t tri_startidx = ret.data.num_tris();
-            for (uint tri_index : dd_float.tri_indices) {
+            for (uint tri_index : dd.tri_indices) {
                 ret.data.tri_indices.push_back(tri_index + verts_startidx);
             }
 
             ret.color_ranges.push_back({
                 tri_startidx,
-                dd_float.num_tris(),
-                dd_float.color
+                dd.num_tris(),
+                dd.color
             });
         }
         return ret;

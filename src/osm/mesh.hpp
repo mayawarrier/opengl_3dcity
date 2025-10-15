@@ -88,8 +88,8 @@ public:
 private:
     bool get_building_part(const building_info& info, building_part& part);
 
-    bool gen_building_drawdata(std::vector<draw_datad>& drawdata, aabb_tree<building*>* out_bldg_tree);
-    bool gen_street_drawdata(std::vector<draw_datad>& drawdata, const aabb_tree<building*>* bldg_tree);
+    bool gen_building_drawdata(std::vector<draw_datad>& drawdata, aabb_tree2d<building*>* out_bldg_tree);
+    bool gen_street_drawdata(std::vector<draw_datad>& drawdata, const aabb_tree2d<building*>* bldg_tree);
 
     std::vector<building> m_buildings;
     std::vector<building_part> m_building_parts;

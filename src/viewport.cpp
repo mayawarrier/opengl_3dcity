@@ -7,7 +7,7 @@
 
 struct fullscreen_info
 {
-    size size;
+    size<int> size;
     int disp_idx;
 };
 
@@ -41,7 +41,7 @@ static bool get_fullscreen_info(fullscreen_info& out_info)
     return false;
 }
 
-window::window(const char* name, const char* title, ::size size, bool fullscreen) :
+window::window(const char* name, const char* title, ::size<int> size, bool fullscreen) :
     m_name(name), m_window(nullptr), m_glcontext(nullptr)
 {
     logMESSAGE("Initializing %s", name);

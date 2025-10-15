@@ -1,3 +1,8 @@
+//
+// todo:
+// Stuff in here is a mix of 2D and N-D geometry utilities (mostly 2D).
+// Needs to be cleaned up or at least labeled better.
+//
 
 #ifndef OSM_GEOM_HPP
 #define OSM_GEOM_HPP
@@ -9,16 +14,38 @@
 
 #include "common.hpp"
 
-#define GLM_ENABLE_EXPERIMENTAL 1
-#include <glm/gtx/component_wise.hpp> 
-#include <glm/gtc/constants.hpp>
-
 // Get a vector perpendicular to the input i.e. cross(z, vec).
 // Applies a 90 degree CCW rotation.
 inline glm::dvec2 vec_perp(glm::dvec2 vec) { return { -vec.y, vec.x }; }
 
 // Get the squared length of a vector.
 inline double vec_sqlength(glm::dvec2 vec) { return glm::dot(vec, vec); }
+
+// Get the index of the minimum element in a vector.
+template <int N, typename T>
+int vec_argmin(const glm::vec<N, T>& vec)
+{
+    int min_idx = 0;
+    for (int i = 1; i < N; ++i) {
+        if (vec[i] < vec[min_idx]) {
+            min_idx = i;
+        }
+    }
+    return min_idx;
+}
+
+// Get the index of the maximum element in a vector.
+template <int N, typename T>
+int vec_argmax(const glm::vec<N, T>& vec)
+{
+    int max_idx = 0;
+    for (int i = 1; i < N; ++i) {
+        if (vec[i] > vec[max_idx]) {
+            max_idx = i;
+        }
+    }
+    return max_idx;
+}
 
 enum seg_inter_type
 {
@@ -131,53 +158,6 @@ bool bbox_intersects_bbox(const bbox<N>& lhs, const bbox<N>& rhs)
     return
         glm::all(glm::lessThanEqual(lhs.min, rhs.max)) &&
         glm::all(glm::greaterThanEqual(lhs.max, rhs.min));
-}
-
-enum ray_bbox_inter_type
-{
-    RAYBOX_INTER_NONE = 0,
-    RAYBOX_INTER_BORDER,
-    RAYBOX_INTER_INSIDE
-};
-
-// Check if ray intersects a bounding box.
-// If ray is normalized, t is distance.
-template <int N>
-ray_bbox_inter_type ray_intersects_bbox(const ray<N>& ray, 
-    const bbox<N>& bbox, double& out_t, const param_range& t_range = {})
-{
-    glm::vec<N, double> tentries, texits;
-
-    // intersect ray with every plane of the box
-    for (int i = 0; i < N; ++i)
-    {
-        if (ray.dir[i] == 0) [[unlikely]]
-        {
-            // if not moving in this dim, must be within bounds
-            if (ray.origin[i] < bbox.min[i] || ray.origin[i] > bbox.max[i]) {
-                return RAYBOX_INTER_NONE;
-            }
-            tentries[i] = -std::numeric_limits<double>::infinity();
-            texits[i] = std::numeric_limits<double>::infinity();
-        }
-        else {
-            double tmin = (bbox.min[i] - ray.origin[i]) / ray.dir[i];
-            double tmax = (bbox.max[i] - ray.origin[i]) / ray.dir[i];
-            std::tie(tentries[i], texits[i]) = std::minmax(tmin, tmax);
-        }
-    }
-
-    double tentry = glm::compMax(tentries);
-    double texit = glm::compMin(texits);
-
-    if (tentry > texit || tentry > t_range.max || texit < t_range.min) {
-        return RAYBOX_INTER_NONE;
-    }
-    // t_entry <= t_range.max already checked
-    bool on_border = tentry >= t_range.min; 
-
-    out_t = on_border ? tentry : t_range.min;
-    return on_border ? RAYBOX_INTER_BORDER : RAYBOX_INTER_INSIDE;
 }
 
 #endif

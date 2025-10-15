@@ -10,10 +10,12 @@
 #include "fwd.hpp"
 
 
+//
 // Axis-aligned bounding box tree.
 // Does not own the objects stored. It is expected that the object type 
 // is a pointer or a cheap-to-copy type that points to the actual data.
-template <typename T, typename Traits>
+//
+template <int N, typename T, typename Traits>
 class aabb_tree
 {
 private:
@@ -21,14 +23,14 @@ private:
     {
         node* left;
         node* right;
-        bbox2d bbox;
+        bbox<N> bbox;
     };
     struct leafnode : public node {
         T data;
     };
 
     static_assert(requires {
-        { Traits::bbox(std::declval<T>()) } -> std::same_as<const bbox2d&>;
+        { Traits::bbox(std::declval<T>()) } -> std::same_as<const bbox<N>&>;
     }, "Invalid Traits type.");
 
 public:
@@ -43,89 +45,86 @@ public:
         return { objects };
     }
 
-    std::vector<T> intersect(const bbox2d& bbox) const
+    std::vector<T> query_bbox_all(const bbox<N>& bbox) const
     {
         std::vector<T> ret;
+        // Good for trees with upto 2^16 objects.
+        types::small_vector<const node*, 16> nodes;
 
-        types::small_vector<node*, 16> nodes;
-        auto push_node_if_intersects = [&](node* node) {
+        auto check_subtree = [&](const node* node) {
             if (node && bbox_intersects_bbox(node->bbox, bbox))
                 nodes.push_back(node);
         };
 
-        push_node_if_intersects(m_root);
+        check_subtree(m_root);
 
         while (!nodes.empty())
         {
-            node* node = nodes.back();
+            auto* node = nodes.back();
             nodes.pop_back();
 
-            // If it intersects, search further down the tree
-            push_node_if_intersects(node->left);
-            push_node_if_intersects(node->right);
+            check_subtree(node->left);
+            check_subtree(node->right);
 
             if (!node->left && !node->right) {
-                ret.push_back(((leafnode*)node)->data);
+                auto* leaf = (const leafnode*)node;
+                ret.push_back(leaf->data);
             }
         }
         return ret;
     }
 
-    // \param ray_hits_object_cb -
-    // callback of type bool(const ray2d&, const T&, double& out_t, param_range, double eps)
-    bool ray_first_hit(const ray2d& ray, auto ray_hits_object_cb, 
-        double& out_t, T& out_object, param_range t_range = {}, double eps = 1e-9) const
+    //
+    // Get the nearest object in the tree to the query (ray or point).
+    // Rays must be normalized.
+    // \param obj_intersect_cb Callback fn to confirm intersection with object.
+    // \param out_dist2 Nearest intersection distance (squared).
+    //
+    bool query_nearest(const auto& query, auto obj_intersect_cb, 
+        double& out_sqdist, T& out_object, const param_range& dist_range = {}, double eps = 1e-9) const
     {
-        double min_hit_t = std::numeric_limits<double>::infinity();
-        T* min_hit_object = nullptr;
+        static_assert(requires {
+            { std::invoke(obj_intersect_cb, query, std::declval<const T&>(), 
+                std::declval<double&>(), dist_range, eps) } -> std::same_as<bool>;
+        }, "Invalid obj_intersect callback.");
 
-        // sufficient for trees with upto 2^16 objects
-        types::small_vector<node*, 16> nodes;
-        auto push_node_if_hit = [&](node* node) 
-        {
-            if (node) {
-                double t = std::numeric_limits<double>::infinity();
-                auto inter_type = ray_intersects_bbox(ray, node->bbox, t, t_range);
+        const T* best_object = nullptr;
+        double best_sqdist = std::numeric_limits<double>::infinity();
 
-                // No intersection or too far, do not search this subtree.
-                // RAYBOX_INTER_INSIDE means ray might still 
-                // hit the object even if t is larger than min_hit_t
-                bool skip_node = inter_type == RAYBOX_INTER_NONE ||
-                    (inter_type == RAYBOX_INTER_BORDER && t >= min_hit_t);
+        // Good for trees with upto 2^16 objects.
+        types::small_vector<const node*, 16> nodes;
 
-                if (!skip_node) {
-                    nodes.push_back(node);
-                }
-            }
+        auto check_subtree = [&](const node* node) {
+            double sqdist = std::numeric_limits<double>::infinity();
+            if (node && intersects_subtree(node, query, dist_range, sqdist) && sqdist < best_sqdist)
+                nodes.push_back(node);
         };
 
-        push_node_if_hit(m_root);
+        check_subtree(m_root);
         
         while (!nodes.empty())
         {
-            node* node = nodes.back();
+            auto* node = nodes.back();
             nodes.pop_back();
 
-            // If it intersects, search further down the tree
-            push_node_if_hit(node->left);
-            push_node_if_hit(node->right);
+            check_subtree(node->left);
+            check_subtree(node->right);
 
             if (!node->left && !node->right) 
             {
-                auto* leaf = (leafnode*)node;
+                auto* leaf = (const leafnode*)node;
 
-                double t = std::numeric_limits<double>::infinity();
-                bool inter = std::invoke(ray_hits_object_cb, ray, leaf->data, t, t_range, eps);
-                if (inter && t < min_hit_t) {
-                    min_hit_t = t;
-                    min_hit_object = &leaf->data;
+                double sqdist = std::numeric_limits<double>::infinity();
+                bool inter = std::invoke(obj_intersect_cb, query, leaf->data, sqdist, dist_range, eps);
+                if (inter && sqdist < best_sqdist) {
+                    best_sqdist = sqdist;
+                    best_object = &leaf->data;
                 }
             }
         }
-
-        if (min_hit_object) {
-            out_t = min_hit_t;
-            out_object = *min_hit_object;
+        if (best_object) {
+            out_sqdist = best_sqdist;
+            out_object = *best_object;
             return true;
         }
         else { return false; }
@@ -136,11 +135,82 @@ public:
     }
 
 private:
+    bool intersects_subtree(const node* node, const ray2d& ray, 
+        const param_range& dist_range, double& out_sqdist) const
+    {
+        auto& bbox = node->bbox;
+
+        double dentry = -std::numeric_limits<double>::infinity();
+        double dexit = std::numeric_limits<double>::infinity();
+
+        // intersect ray with every slab of the box
+        for (int i = 0; i < N; ++i)
+        {
+            if (ray.dir[i] == 0) [[unlikely]] {
+                // if not moving in this dim, must be within bounds
+                if (ray.origin[i] < bbox.min[i] || ray.origin[i] > bbox.max[i]) {
+                    return false;
+                }
+                continue;
+            }
+            // intersections with min and max planes
+            double dmin = (bbox.min[i] - ray.origin[i]) / ray.dir[i];
+            double dmax = (bbox.max[i] - ray.origin[i]) / ray.dir[i];
+
+            auto [d1, d2] = std::minmax(dmin, dmax);
+            dentry = std::max(dentry, d1);
+            dexit = std::min(dexit, d2);
+        }
+
+        if (dentry > dexit || dentry > dist_range.max || dexit < dist_range.min) {
+            return false;
+        }
+        // t_entry <= t_range.max already checked
+        double d = std::max(dentry, dist_range.min);
+        out_sqdist = d * d;
+        return true;
+    }
+
+    bool intersects_subtree(const node* node, const glm::dvec2& query, 
+        const param_range& radius_range, double& out_sqdist) const
+    {
+        auto& bbox = node->bbox;
+
+        // Closest and furthest points from query to bbox
+        double dmin2 = 0.0, dmax2 = 0.0;
+        for (int i = 0; i < N; ++i) 
+        {
+            // If within the slab in this dim, no contribution
+            // If all dims are inside, then dmin2 = 0
+            double dmin;
+            if (query[i] < bbox.min[i]) {
+                dmin = (bbox.min[i] - query[i]);
+            } 
+            else if (query[i] > bbox.max[i]) {
+                dmin = (query[i] - bbox.max[i]);
+            }
+            dmin2 += dmin * dmin;
+
+            // Furthest point is always one of the corners
+            // Add the max distance to a slab plane in this dim
+            double dmax = std::max(
+                std::abs(bbox.min[i] - query[i]), 
+                std::abs(bbox.max[i] - query[i]));
+            dmax2 += dmax * dmax;
+        }
+
+        if (dmin2 > radius_range.max2 || dmax2 < radius_range.min2) {
+            return false;
+        }
+        out_sqdist = dmin2;
+        return true;
+    }
+
     aabb_tree(std::span<T> objects) :
         m_root(make_tree(objects.data(), objects.size()))
     {}
 
-    static node* make_tree(T* objects, size_t num_objects)
+    node* make_tree(T* objects, size_t num_objects)
     {
         if (num_objects == 0) {
             return nullptr;
@@ -161,8 +231,8 @@ private:
                 n->bbox.extend(Traits::bbox(objects[i]));
             }
 
-            glm::vec2 dim_sizes = n->bbox.max - n->bbox.min;
-            int longest_dim = dim_sizes.x > dim_sizes.y ? 0 : 1;
+            auto dim_sizes = n->bbox.max - n->bbox.min;
+            int longest_dim = vec_argmax(dim_sizes);
 
             std::sort(objects, objects + num_objects,
                 [&](const T& lhs, const T& rhs) 
@@ -182,7 +252,7 @@ private:
         }
     }
 
-    static void delete_tree(node* node)
+    void delete_tree(node* node)
     {
         if (!node) { return; }
 

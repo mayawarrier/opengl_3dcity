@@ -2,6 +2,9 @@
 #include <boost/geometry.hpp>
 #include <mapbox/earcut.hpp>
 
+#define GLM_ENABLE_EXPERIMENTAL 1
+#include <glm/gtc/constants.hpp>
+
 #include "geom.hpp"
 
 static inline seg_inter_type classify_seg_inter_type(double param1, double param2)
