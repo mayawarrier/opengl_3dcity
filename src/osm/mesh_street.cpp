@@ -101,6 +101,38 @@ bool mesh_builder::add_highway(const highway_info& info)
 
 using way_net = way_network<mesh_builder::highway>;
 
+static inline int path_num_segs(const way_net::path* path) {
+    return int(path->nodes.size()) - 1;
+}
+
+static inline segment path_seg(const way_net::path* path, int idx) {
+    return { path->nodes[idx].vert, path->nodes[idx + 1].vert };
+}
+
+static inline double path_seg_width(const way_net::path* path, int idx) {
+    // +1 because in_way is null for the first node
+    return path->nodes[idx + 1].in_way->width;
+}
+
+// Get direction of point relative to path segment.
+static direction path_seg_pt_rel_dir(const way_net::path* path, int idx, const glm::dvec2& point)
+{
+    auto seg = path_seg(path, idx);
+    auto pto = orient(seg.first, seg.second, point);
+    switch (pto)
+    {
+        case ORIENT_CCW:
+            return DIR_LEFT;
+        case ORIENT_COLL:
+            return DIR_UNDEF;
+        case ORIENT_CW:
+            return DIR_RIGHT;
+        default:
+            assert(false);
+            return DIR_UNDEF;
+    }
+}
+
 // Get all paths between intersections including this node.
 // Traversing outwards from _all_ nodes instead of just intersections ensures
 // that disconnected components (for eg. racetracks) are not missed.
@@ -161,10 +193,12 @@ static std::vector<way_net::path> get_all_paths_bw_intersections(way_net& networ
 struct tree_path_seg
 {
     osm_node start, end;
+    glm::dvec2 udir;
     bbox2d bbox;
-    const mesh_builder::highway* way;
 
+    const mesh_builder::highway* way;
     const way_net::path* path;
+
     // Index in the global path segments vec
     int prev_seg_gidx, next_seg_gidx;
     // Index in the path
@@ -187,7 +221,7 @@ static std::vector<tree_path_seg> get_all_path_segments(const std::vector<way_ne
         assert_msg(path.nodes.size() >= 2, "bad path");
 
         int startidx = int(ret.size());
-        for (int i = 0; i < int(path.nodes.size() - 1); ++i)
+        for (int i = 0; i < path_num_segs(&path); ++i)
         {
             auto& start = path.nodes[i];
             auto& end = path.nodes[i + 1];
@@ -197,11 +231,12 @@ static std::vector<tree_path_seg> get_all_path_segments(const std::vector<way_ne
             bbox.extend(end.vert);
 
             int prev_seg_gidx = i > 0 ? (startidx + i - 1) : -1;
-            int next_seg_gidx = i < path.nodes.size() - 2 ? (startidx + i + 1) : -1;
+            int next_seg_gidx = i < (int(path.nodes.size()) - 2) ? (startidx + i + 1) : -1;
 
             ret.push_back({
                 .start = start.osm_node(),
                 .end = end.osm_node(),
+                .udir = glm::normalize(end.vert - start.vert),
                 .bbox = bbox,
                 .way = end.in_way,
                 .path = &path,
@@ -317,159 +352,183 @@ struct outline_node
 
 struct outline_proj
 {
-    struct stseg
-    {
+    const way_net::path* street;
+    struct data {
         double pt_param;
         int seg_pidx;
-    };
-    struct data
-    {
-        stseg stseg;
-        direction dir;
-    };
-    const way_net::path* street;
-    data proj;
-};
+    } proj;
 
-
-static inline segment path_seg(const way_net::path* path, int idx) {
-    return { path->nodes[idx].vert, path->nodes[idx + 1].vert };
-}
-
-static inline double path_seg_width(const way_net::path* path, int idx) {
-    // +1 because in_way is null for the first node
-    return path->nodes[idx + 1].in_way->width;
-}
-
-// ray.dir must be normalized!
-static outline_proj get_street_projection(const ray2d& ray, const tree_path_seg* src_seg,
-    const aabb_tree2d<tree_path_seg*>& seg_tree, const aabb_tree2d<mesh_builder::building*>& bldg_tree, double eps)
-{
-    // ------ approximate nearest street segment ------
-
-    auto seg_hit_cb = [&](const ray2d& ray, tree_path_seg* cand_seg, 
-        double& out_canddist, const param_range& dist_range, double eps) -> bool
-    {
-        if (cand_seg == src_seg) {
-            return false; 
-        }
-        // check if footpath and street are somewhat parallel
-        if (cand_seg->way->type == WAY_TYPE_STREET) 
-        {
-            double angle_bw = min_angle_bw(ray.dir, cand_seg->end.vert - cand_seg->start.vert);
-            if (std::abs(glm::degrees(angle_bw) - 90.0) > 45.0) {
-                return false;
-            }
-        }
-        segment ray_ptseg = { ray.at_param(dist_range.min), ray.at_param(dist_range.max) };
-        segment cand_ptseg = { cand_seg->start.vert, cand_seg->end.vert };
-
-        seg_inter_result inter_res;
-        if (seg_intersect(ray_ptseg, cand_ptseg, inter_res, eps)) {
-            out_canddist = vec_sqlength(inter_res.point - ray.origin);
-            return true;
-        }
-        else { return false; }
-    };
-
-    tree_path_seg* hit_seg = nullptr;
-    {
-        tree_path_seg* tmp_hitseg; double _;
-        bool ray_hit = seg_tree.query_nearest(ray, seg_hit_cb, _, tmp_hitseg, { 0.0, 20.0 }, eps);
-        if (ray_hit && tmp_hitseg->way->type == WAY_TYPE_STREET) {
-            hit_seg = tmp_hitseg;
-        }
-    }
-
-    static constexpr outline_proj no_proj{
-        .street = nullptr,
-        .proj = {
-            .stseg = {
+    static constexpr outline_proj no_proj() {
+        return {
+            .street = nullptr,
+            .proj = {
                 .pt_param = -1.0,
                 .seg_pidx = -1
-            },
-            .dir = DIR_UNDEF
-        }
+            }
+        };
+    }
+};
+
+// ray.dir must be normalized!
+static outline_proj get_street_projection(const glm::dvec2& sample, const tree_path_seg* src_tseg,
+    const aabb_tree2d<tree_path_seg*>& seg_tree, const aabb_tree2d<mesh_builder::building*>& bldg_tree, double eps)
+{
+    struct tree_qdata
+    {
+        double sqdist;
+        double pt_param;
     };
 
-    if (!hit_seg) {
-        return no_proj;
-    }
+    tree_qdata hit_segdata{};
+    tree_path_seg* hit_seg = nullptr;
 
-    // ------ find nearest segment exactly, and  ------
-    // Endpoints must be projectable so that holes can be filled properly.
-    // This also handles some edge cases where the ray hits the street at a large angle.
-
-    const way_net::path* street = hit_seg->path;
-    const int init_seg_pidx = hit_seg->pathidx;
-
-    auto try_project_point = [&](int segidx, outline_proj& res)
-    {
-        segment stseg = path_seg(street, segidx);
-
-        auto result = seg_project_point(stseg, ray.origin);
-        if (result.is_inside) 
+    auto dist_range = param_range{ 0.0, 20.0 };
+    bool hit = seg_tree.query_nearest(sample, dist_range,
+        [&](tree_path_seg* cand_tseg, tree_qdata& out_qdata) -> bool
         {
-            auto rayseg_dir = glm::normalize(ray.origin - result.proj);
-            auto stseg_leftdir = glm::normalize(vec_perp(stseg.second - stseg.first));
+            if (cand_tseg->path == src_tseg->path) {
+                return false;
+            }
 
-            double angle_left = min_angle_bw_unitvecs(rayseg_dir, stseg_leftdir);
-            double angle_right = min_angle_bw_unitvecs(rayseg_dir, -stseg_leftdir);
-            assert_msg(angle_left != angle_right, "should not be possible");
+            // check if footpath and street are somewhat parallel
+            //if (cand_tseg->way->type == WAY_TYPE_STREET)
+            //{
+                double angle_bw = min_angle_bw_unitdirs(src_tseg->udir, cand_tseg->udir);
+                if (std::abs(glm::degrees(angle_bw)) > 45.0) {
+                    return false;
+                } 
+            //}
 
-            res = {
-                .street = street,
-                .proj = {
-                    .stseg = {
-                        .pt_param = result.proj_param,
-                        .seg_pidx = segidx
-                    },
-                    .dir = angle_left < angle_right ? DIR_LEFT : DIR_RIGHT
-                }
+            segment seg = { cand_tseg->start.vert, cand_tseg->end.vert };
+
+            // project sample onto segment
+            glm::dvec2 ap = sample - seg.first;
+            glm::dvec2 ab = seg.second - seg.first;
+            double t = glm::dot(ap, ab) / glm::dot(ab, ab);
+
+            // reject if out of path bounds
+            int seg_pidx = cand_tseg->pathidx;
+            if ((t < 0 && seg_pidx == 0) ||
+                (t > 1.0 && seg_pidx == path_num_segs(cand_tseg->path) - 1)) {
+                return false;
+            }
+
+            double t_clamped = std::clamp(t, 0.0, 1.0);
+            double sqdist = vec_sqlength(sample - (seg.first + t_clamped * ab));
+
+            if (sqdist < dist_range.min2() || sqdist > dist_range.max2()) {
+                return false;
+            }                
+            out_qdata = {
+                .sqdist = sqdist,
+                .pt_param = t // keep original
             };
             return true;
-        }
+        },
+        hit_seg, hit_segdata);
 
-        return false;
-    };
-
-    // Try the original segment (fast path)
-    outline_proj proj;
-    if (try_project_point(init_seg_pidx, proj)) {
-        return proj;
-    }
-
-    assert(street->nodes.size() >= 2);
-
-    // Try all segments (nearby first)
-    int hitseg_off = 1;
-    const int num_segments = int(street->nodes.size() - 1);
-    while (true)
+    if (hit && hit_seg->way->type == WAY_TYPE_STREET) 
     {
-        int prev_segidx = init_seg_pidx - hitseg_off;
-        int next_segidx = init_seg_pidx + hitseg_off;
-        bool has_prev = prev_segidx > -1;
-        bool has_next = next_segidx < num_segments;
-        
-        if (!has_prev && !has_next) { 
-            break; 
-        }
-        if (has_prev && try_project_point(prev_segidx, proj)) {
-            return proj;
-        }
-        if (has_next && try_project_point(next_segidx, proj)) {
-            return proj;
-        }
-        hitseg_off++;
+        return {
+            .street = hit_seg->path,
+            .proj = {
+                .pt_param = hit_segdata.pt_param,
+                .seg_pidx = hit_seg->pathidx,
+            }
+        };
     }
     
-    return no_proj;
+    return outline_proj::no_proj();
+
+    //static constexpr outline_proj no_proj{
+    //    .street = nullptr,
+    //    .proj = {
+    //        .stseg = {
+    //            .pt_param = -1.0,
+    //            .seg_pidx = -1
+    //        },
+    //        .dir = DIR_UNDEF
+    //    }
+    //};
+    //
+    //if (!hit_seg) {
+    //    return no_proj;
+    //}
+    //
+    //// ------ find nearest segment exactly, and  ------
+    //// Endpoints must be projectable so that holes can be filled properly.
+    //// This also handles some edge cases where the ray hits the street at a large angle.
+    //
+    //const way_net::path* street = hit_seg->path;
+    //const int init_seg_pidx = hit_seg->pathidx;
+    //
+    //auto try_project_point = [&](int segidx, outline_proj& res)
+    //{
+    //    segment stseg = path_seg(street, segidx);
+    //
+    //    auto result = seg_project_point(stseg, ray.origin);
+    //    if (result.is_inside) 
+    //    {
+    //        auto rayseg_dir = glm::normalize(ray.origin - result.proj);
+    //        auto stseg_leftdir = glm::normalize(vec_perp(stseg.second - stseg.first));
+    //
+    //        double angle_left = min_angle_bw_unitvecs(rayseg_dir, stseg_leftdir);
+    //        double angle_right = min_angle_bw_unitvecs(rayseg_dir, -stseg_leftdir);
+    //        assert_msg(angle_left != angle_right, "should not be possible");
+    //
+    //        res = {
+    //            .street = street,
+    //            .proj = {
+    //                .stseg = {
+    //                    .pt_param = result.proj_param,
+    //                    .seg_pidx = segidx
+    //                },
+    //                .dir = angle_left < angle_right ? DIR_LEFT : DIR_RIGHT
+    //            }
+    //        };
+    //        return true;
+    //    }
+    //
+    //    return false;
+    //};
+    //
+    //// Try the original segment (fast path)
+    //outline_proj proj;
+    //if (try_project_point(init_seg_pidx, proj)) {
+    //    return proj;
+    //}
+    //
+    //assert(street->nodes.size() >= 2);
+    //
+    //// Try all segments (nearby first)
+    //int hitseg_off = 1;
+    //const int num_segments = int(street->nodes.size() - 1);
+    //while (true)
+    //{
+    //    int prev_segidx = init_seg_pidx - hitseg_off;
+    //    int next_segidx = init_seg_pidx + hitseg_off;
+    //    bool has_prev = prev_segidx > -1;
+    //    bool has_next = next_segidx < num_segments;
+    //    
+    //    if (!has_prev && !has_next) { 
+    //        break; 
+    //    }
+    //    if (has_prev && try_project_point(prev_segidx, proj)) {
+    //        return proj;
+    //    }
+    //    if (has_next && try_project_point(next_segidx, proj)) {
+    //        return proj;
+    //    }
+    //    hitseg_off++;
+    //}
+    //
+    //return no_proj;
 };
 
 struct st_outline
 {
     std::vector<outline_node> nodes;
-    outline_proj::stseg start_proj, end_proj;
+    outline_proj::data start_proj, end_proj;
     direction dir; // wrt to street
 };
 
@@ -499,7 +558,7 @@ static std::vector<st_outlines_entry> get_all_st_ft_outlines(const aabb_tree2d<t
 
     // required? seems like it makes no difference
     types::unsync_pool_alloc<outline_proj> proj_alloc;
-    types::unsync_pool_alloc<glm::dvec2> rayorig_alloc;
+    types::unsync_pool_alloc<glm::dvec2> samples_alloc;
 
     for (auto& fseg : footpath_segments)
     {
@@ -507,41 +566,44 @@ static std::vector<st_outlines_entry> get_all_st_ft_outlines(const aabb_tree2d<t
         glm::dvec2 fseg_perp_dir = glm::normalize(vec_perp(fseg_vec));
 
         double seg_length = glm::length(fseg_vec);
-        int num_rays = std::max(1, int(std::ceil(seg_length / RAYCAST_INTERVAL - eps))) + 1;
+        int num_samples = std::max(1, int(std::ceil(seg_length / RAYCAST_INTERVAL - eps))) + 1;
 
-        auto projs = std::span(proj_alloc.allocate(num_rays), num_rays);
-        auto ray_origins = std::span(rayorig_alloc.allocate(num_rays), num_rays);
+        auto projs = std::span(proj_alloc.allocate(num_samples), num_samples);
+        auto samples = std::span(samples_alloc.allocate(num_samples), num_samples);
 
-        for (int i = 0; i < num_rays; ++i) {
-            ray_origins[i] = fseg.start.vert + (double(i) / num_rays) * fseg_vec;
+        for (int i = 0; i < num_samples; ++i) {
+            samples[i] = fseg.start.vert + (double(i) / num_samples) * fseg_vec;
         }
 
-        for (glm::dvec2 ray_dir : { fseg_perp_dir, -fseg_perp_dir })
-        {
-            for (int i = 0; i < num_rays; ++i) {
-                ray2d ray{ .origin = ray_origins[i], .dir = ray_dir };
-                projs[i] = get_street_projection(ray, &fseg, seg_tree, bldg_tree, eps);
+        //for (glm::dvec2 ray_dir : { fseg_perp_dir, -fseg_perp_dir })
+        //{
+            if (fseg.way->id == 366054816) {
+                logMESSAGE("debug");
             }
 
-            /*if (fseg.way->id == 366054816) {
+            for (int i = 0; i < num_samples; ++i) {
+                projs[i] = get_street_projection(samples[i], &fseg, seg_tree, bldg_tree, eps);
+            }
+
+            if (fseg.way->id == 366054816) {
                 logMESSAGE("debug");
-            }*/
+            }
 
             int rayidx = 0;
-            while (rayidx < num_rays)
+            while (rayidx < num_samples)
             {
                 // get largest piece that hits the same street
                 int pc_startidx = rayidx;
-                while (pc_startidx < num_rays && !projs[pc_startidx].street) {
+                while (pc_startidx < num_samples && !projs[pc_startidx].street) {
                     pc_startidx++;
                 }
                 int pc_endidx = pc_startidx + 1;
-                while (pc_endidx < num_rays && projs[pc_endidx].street &&
+                while (pc_endidx < num_samples && projs[pc_endidx].street &&
                     projs[pc_endidx].street == projs[pc_startidx].street) {
                     pc_endidx++;
                 }
 
-                if (pc_startidx < num_rays && pc_endidx - pc_startidx > 1)
+                if (pc_startidx < num_samples && pc_endidx - pc_startidx > 1)
                 {
                     outline_piece piece;
                     piece.seg = &fseg;
@@ -550,13 +612,13 @@ static std::vector<st_outlines_entry> get_all_st_ft_outlines(const aabb_tree2d<t
                         piece.start = outline_node::osm(fseg.start);
                     } else {
                         piece.start.id = -1;
-                        piece.start.vert = ray_origins[pc_startidx];
+                        piece.start.vert = samples[pc_startidx];
                     }
-                    if (pc_endidx == num_rays) {
+                    if (pc_endidx == num_samples) {
                         piece.end = outline_node::osm(fseg.end);
                     } else {
                         piece.end.id = -1;
-                        piece.end.vert = ray_origins[pc_endidx - 1];
+                        piece.end.vert = samples[pc_endidx - 1];
                     }
 
                     piece.start_proj = projs[pc_startidx].proj;
@@ -572,9 +634,9 @@ static std::vector<st_outlines_entry> get_all_st_ft_outlines(const aabb_tree2d<t
 
                 rayidx = pc_endidx;
             }
-        }
-        proj_alloc.deallocate(projs.data(), num_rays);
-        rayorig_alloc.deallocate(ray_origins.data(), num_rays);
+        //}
+        proj_alloc.deallocate(projs.data(), num_samples);
+        samples_alloc.deallocate(samples.data(), num_samples);
     }
 
     int num_bad_outlines = 0, num_outlines = 0;
@@ -618,9 +680,9 @@ static std::vector<st_outlines_entry> get_all_st_ft_outlines(const aabb_tree2d<t
                     cur_piece = prev_piece;
                 }
 
-                outline.start_proj = cur_piece->start_proj.stseg;
-                outline_start_dir = cur_piece->start_proj.dir;
-                assert(outline_start_dir != DIR_UNDEF);
+                outline.start_proj = cur_piece->start_proj;
+                outline_start_dir = path_seg_pt_rel_dir(street, 
+                    cur_piece->start_proj.seg_pidx, cur_piece->start.vert);
                 outline.dir = outline_start_dir;
 
                 // extend chain forwards to init piece
@@ -664,12 +726,14 @@ static std::vector<st_outlines_entry> get_all_st_ft_outlines(const aabb_tree2d<t
                 outline.nodes.push_back(cur_piece->end);
                 assert(outline.nodes.size() >= 2);
 
-                outline.end_proj = cur_piece->end_proj.stseg;
-                outline_end_dir = cur_piece->end_proj.dir;
-                assert(outline_end_dir != DIR_UNDEF);
+                outline.end_proj = cur_piece->end_proj;
+                outline_end_dir = path_seg_pt_rel_dir(street, 
+                    cur_piece->end_proj.seg_pidx, cur_piece->end.vert);
 
                 num_outlines++;
             }
+
+            assert(outline_start_dir != DIR_UNDEF && outline_end_dir != DIR_UNDEF);
 
             // this means that the footpath crossed the street, which is very unlikely
             if (outline_start_dir != outline_end_dir) {

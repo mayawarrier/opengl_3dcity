@@ -128,27 +128,28 @@ glm::dvec2 seg_normal(const segment& seg, direction dir, double width)
         glm::normalize(vec_perp(seg.second - seg.first));
 }
 
-double angle_bw(glm::dvec2 a, glm::dvec2 b)
-{
-    double cos_theta = glm::dot(a, b) / (glm::length(a) * glm::length(b));
-    return std::acos(std::clamp(cos_theta, -1.0, 1.0));
+static double cos_bw(glm::dvec2 a, glm::dvec2 b) {
+    return glm::dot(a, b) / (glm::length(a) * glm::length(b));
 }
 
-double angle_bw_unitvecs(glm::dvec2 a, glm::dvec2 b)
+double angle_bw(glm::dvec2 a, glm::dvec2 b)
+{
+    return std::acos(std::clamp(cos_bw(a, b), -1.0, 1.0));
+}
+
+double angle_bw_unitdirs(glm::dvec2 a, glm::dvec2 b)
 {
     return std::acos(std::clamp(glm::dot(a, b), -1.0, 1.0));
 }
 
 double min_angle_bw(glm::dvec2 a, glm::dvec2 b)
 {
-    double angle = angle_bw(a, b);
-    return std::min(angle, glm::two_pi<double>() - angle);
+    return std::acos(std::abs(cos_bw(a, b)));
 }
 
-double min_angle_bw_unitvecs(glm::dvec2 a, glm::dvec2 b)
+double min_angle_bw_unitdirs(glm::dvec2 a, glm::dvec2 b)
 {
-    double angle = angle_bw_unitvecs(a, b);
-    return std::min(angle, glm::two_pi<double>() - angle);
+    return std::acos(std::abs(glm::dot(a, b)));
 }
 
 // https://en.wikipedia.org/wiki/Shoelace_formula

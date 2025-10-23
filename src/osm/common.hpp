@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <vector>
+#include <string>
 
 #include <osmium/osm/types.hpp>
 #include <glm/glm.hpp>
@@ -12,7 +13,6 @@
 #include <boost/unordered/unordered_flat_map_fwd.hpp>
 #include <boost/container/container_fwd.hpp>
 #else
-#include <vector>
 #include <unordered_map>
 #include <set>
 #endif
@@ -93,21 +93,42 @@ using ray3d = ray<3>;
 
 // Range of parameter t. 
 // These values may be infinite - check before using!
-struct param_range
+class param_range
 {
-    double min = 0.0;
-    double max = std::numeric_limits<double>::infinity();
-    double min2 = 0.0;
-    double max2 = std::numeric_limits<double>::infinity();
-
-    param_range() = default;
+public:
+    param_range() : 
+        m_min(0.0), m_max(std::numeric_limits<double>::infinity()),
+        m_min2(0.0), m_max2(std::numeric_limits<double>::infinity())
+    {}
 
     param_range(double min, double max) : 
-        min(min), max(max) 
+        m_min(min), m_max(max) 
     {
-        min2 = min * min;
-        max2 = max * max;
+        assert(min <= max);
+        m_min2 = min * min;
+        m_max2 = max * max;
     }
+
+    double min() const { return m_min; }
+    double max() const { return m_max; }
+    double min2() const { return m_min2; }
+    double max2() const { return m_max2; }
+
+    bool nonneg() const {
+        return m_min >= 0.0 && m_min <= m_max;
+    }
+
+    bool overlaps(double r_min, double r_max) const {
+        return !(m_max < r_min || r_max < m_min);
+    }
+    bool overlaps2(double r_min2, double r_max2) const {
+        return !(m_max2 < r_min2 || r_max2 < m_min2);
+    }
+
+private:
+    double m_min, m_max;
+    double m_min2, m_max2;
+
 };
 
 // Axis-aligned bounding box.
@@ -182,7 +203,5 @@ struct draw_data
 
 using draw_dataf = draw_data<float>;
 using draw_datad = draw_data<double>;
-
-
 
 #endif

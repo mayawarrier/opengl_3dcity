@@ -97,17 +97,21 @@ inline glm::dvec2 seg_at_param(const segment& seg, double t) {
 // dir_left = 90 degree CCW, dir_right = 90 degree CW.
 glm::dvec2 seg_normal(const segment& seg, direction dir, double width);
 
-// Get angle between two vectors (in radians).
+// Get unoriented angle between two vectors (in radians).
+// Returns value in [0, pi].
 double angle_bw(glm::dvec2 a, glm::dvec2 b);
 
-// Get angle between two normalized vectors (in radians).
-double angle_bw_unitvecs(glm::dvec2 a, glm::dvec2 b);
+// Get unoriented angle between two normalized vectors (in radians).
+// Returns value in [0, pi].
+double angle_bw_unitdirs(glm::dvec2 a, glm::dvec2 b);
 
-// Get minimum angle between two vectors (in radians).
+// Get minimum unoriented angle between two vectors (in radians).
+// Returns value in [0, pi/2].
 double min_angle_bw(glm::dvec2 a, glm::dvec2 b);
 
-// Get minimum angle between two normalized vectors (in radians).
-double min_angle_bw_unitvecs(glm::dvec2 a, glm::dvec2 b);
+// Get minimum unoriented angle between two normalized vectors (in radians).
+// Returns value in [0, pi/2].
+double min_angle_bw_unitdirs(glm::dvec2 a, glm::dvec2 b);
 
 // Get minimum angle between two segments (in radians).
 inline double min_angle_bw_segs(const segment& seg1, const segment& seg2)

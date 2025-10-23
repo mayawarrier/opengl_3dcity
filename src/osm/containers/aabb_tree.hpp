@@ -10,6 +10,12 @@
 #include "fwd.hpp"
 
 
+// Default data returned from nearest query.
+struct aabb_querydata
+{
+    double sqdist;
+};
+
 //
 // Axis-aligned bounding box tree.
 // Does not own the objects stored. It is expected that the object type 
@@ -78,25 +84,27 @@ public:
     // Get the nearest object in the tree to the query (ray or point).
     // Rays must be normalized.
     // \param obj_intersect_cb Callback fn to confirm intersection with object.
-    // \param out_dist2 Nearest intersection distance (squared).
+    // \param out_qdata Additional data about the intersection/object.
     //
-    bool query_nearest(const auto& query, auto obj_intersect_cb, 
-        double& out_sqdist, T& out_object, const param_range& dist_range = {}, double eps = 1e-9) const
+    template <typename QueryData = aabb_querydata>
+    bool query_nearest(const auto& query, const param_range& dist_range, 
+        auto obj_intersect_cb, T& out_object, QueryData& out_qdata) const
     {
         static_assert(requires {
-            { std::invoke(obj_intersect_cb, query, std::declval<const T&>(), 
-                std::declval<double&>(), dist_range, eps) } -> std::same_as<bool>;
+            { std::invoke(obj_intersect_cb, 
+                std::declval<const T&>(), std::declval<QueryData&>()) } -> std::same_as<bool>;
         }, "Invalid obj_intersect callback.");
 
         const T* best_object = nullptr;
-        double best_sqdist = std::numeric_limits<double>::infinity();
+        QueryData best_qdata{};
+        best_qdata.sqdist = std::numeric_limits<double>::infinity();
 
         // Good for trees with upto 2^16 objects.
         types::small_vector<const node*, 16> nodes;
 
         auto check_subtree = [&](const node* node) {
             double sqdist = std::numeric_limits<double>::infinity();
-            if (node && intersects_subtree(node, query, dist_range, sqdist) && sqdist < best_sqdist)
+            if (node && intersects_subtree(node, query, dist_range, sqdist) && sqdist < best_qdata.sqdist)
                 nodes.push_back(node);
         };
 
@@ -114,21 +122,22 @@ public:
             {
                 auto* leaf = (const leafnode*)node;
 
-                double sqdist = std::numeric_limits<double>::infinity();
-                bool inter = std::invoke(obj_intersect_cb, query, leaf->data, sqdist, dist_range, eps);
-                if (inter && sqdist < best_sqdist) {
-                    best_sqdist = sqdist;
+                QueryData qdata{};
+                bool inter = std::invoke(obj_intersect_cb, leaf->data, qdata);
+                if (inter && qdata.sqdist < best_qdata.sqdist) {
                     best_object = &leaf->data;
+                    best_qdata = qdata;
                 }
             }
         }
         if (best_object) {
-            out_sqdist = best_sqdist;
             out_object = *best_object;
+            out_qdata = best_qdata;
             return true;
         }
         else { return false; }
     }
+
 
     ~aabb_tree() {
         delete_tree(m_root);
@@ -162,11 +171,11 @@ private:
             dexit = std::min(dexit, d2);
         }
 
-        if (dentry > dexit || dentry > dist_range.max || dexit < dist_range.min) {
+        if (dentry > dexit || !dist_range.overlaps(dentry, dexit)) {
             return false;
         }
-        // t_entry <= t_range.max already checked
-        double d = std::max(dentry, dist_range.min);
+        // dentry <= dist_range.max already checked
+        double d = std::max(dentry, dist_range.min());
         out_sqdist = d * d;
         return true;
     }
@@ -175,6 +184,7 @@ private:
         const param_range& radius_range, double& out_sqdist) const
     {
         auto& bbox = node->bbox;
+        assert(radius_range.nonneg());
 
         // Closest and furthest points from query to bbox
         double dmin2 = 0.0, dmax2 = 0.0;
@@ -182,7 +192,7 @@ private:
         {
             // If within the slab in this dim, no contribution
             // If all dims are inside, then dmin2 = 0
-            double dmin;
+            double dmin = 0.0;
             if (query[i] < bbox.min[i]) {
                 dmin = (bbox.min[i] - query[i]);
             } 
@@ -199,10 +209,10 @@ private:
             dmax2 += dmax * dmax;
         }
 
-        if (dmin2 > radius_range.max2 || dmax2 < radius_range.min2) {
+        if (!radius_range.overlaps2(dmin2, dmax2)) {
             return false;
         }
-        out_sqdist = dmin2;
+        out_sqdist = std::max(dmin2, radius_range.min2());
         return true;
     }
 
