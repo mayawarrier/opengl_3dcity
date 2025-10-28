@@ -73,9 +73,6 @@ target_link_libraries(3dcity PRIVATE Boost::unordered)
 find_package(Boost REQUIRED COMPONENTS container)
 target_link_libraries(3dcity PRIVATE Boost::container)
 
-find_package(boost_pool CONFIG REQUIRED)
-target_link_libraries(3dcity PRIVATE Boost::pool)
-
 find_package(CGAL CONFIG REQUIRED)
 target_link_libraries(3dcity PRIVATE CGAL::CGAL)
 

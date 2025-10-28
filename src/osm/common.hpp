@@ -17,8 +17,6 @@
 #include <set>
 #endif
 
-#include <boost/pool/poolfwd.hpp>
-
 #include "../utils.hpp"
 
 enum way_type
@@ -65,10 +63,6 @@ namespace types
     template <typename T, size_t N, typename ...Args> 
     using small_vector = std::vector<T>;
 #endif
-
-    template <typename T>
-    using unsync_pool_alloc = boost::pool_allocator<T, 
-        boost::default_user_allocator_new_delete, boost::details::pool::null_mutex>;
 }
 
 using segment = std::pair<glm::dvec2, glm::dvec2>;

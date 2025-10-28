@@ -13,7 +13,6 @@
         "version>=": "1.88.0"
     },
     "boost-unordered",
-    "boost-pool",
     "cgal",
     "scottt-debugbreak"
   ]
