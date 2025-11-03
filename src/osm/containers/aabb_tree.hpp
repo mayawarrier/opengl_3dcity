@@ -102,7 +102,8 @@ public:
         // Good for trees with upto 2^16 objects.
         types::small_vector<const node*, 16> nodes;
 
-        auto check_subtree = [&](const node* node) {
+        auto check_subtree = [&](const node* node) 
+        {
             double sqdist = std::numeric_limits<double>::infinity();
             if (node && intersects_subtree(node, query, dist_range, sqdist) && sqdist < best_qdata.sqdist)
                 nodes.push_back(node);

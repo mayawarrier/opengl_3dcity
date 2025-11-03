@@ -93,6 +93,7 @@ struct way_network
         {
             osmium::object_id_type id;
             glm::dvec2 vert;
+
             // way into this node from the previous node,
             // null for the first node in the path
             const TWay* in_way;

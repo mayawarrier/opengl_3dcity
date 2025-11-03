@@ -114,6 +114,7 @@ double min_angle_bw(glm::dvec2 a, glm::dvec2 b);
 double min_angle_bw_unitdirs(glm::dvec2 a, glm::dvec2 b);
 
 // Get minimum angle between two segments (in radians).
+// Returns value in [0, pi/2].
 inline double min_angle_bw_segs(const segment& seg1, const segment& seg2)
 {
     glm::dvec2 dir1 = seg1.second - seg1.first;

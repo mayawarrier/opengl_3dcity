@@ -128,7 +128,7 @@ glm::dvec2 seg_normal(const segment& seg, direction dir, double width)
         glm::normalize(vec_perp(seg.second - seg.first));
 }
 
-static double cos_bw(glm::dvec2 a, glm::dvec2 b) {
+static inline double cos_bw(glm::dvec2 a, glm::dvec2 b) {
     return glm::dot(a, b) / (glm::length(a) * glm::length(b));
 }
 
