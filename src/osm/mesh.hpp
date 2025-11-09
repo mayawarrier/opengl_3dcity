@@ -11,7 +11,7 @@
 #include "common.hpp"
 
 
-// Processes OSM data into a set of meshes/lines
+// Processes OSM data into a set of meshes/triangles
 // that can be rendered by opengl.
 class mesh_builder
 {

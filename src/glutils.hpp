@@ -3,16 +3,12 @@
 #include "glad/glad.h"
 #include "utils.hpp"
 
-
-#define GL_CLASS(classname, handlename) \
-    MOVE_ONLY_CLASS(classname, handlename, 0)
-
 class texture2d
 {
 public:
     texture2d(const fs::path& path);
 
-    GL_CLASS(texture2d, m_handle)
+    HANDLE_CLASS(texture2d, m_handle, 0)
 
     unsigned handle() const noexcept { return m_handle; }
 
@@ -37,7 +33,7 @@ public:
         shaderfile(info.path, info.type) 
     {}
 
-    GL_CLASS(shaderfile, m_handle)
+    HANDLE_CLASS(shaderfile, m_handle, 0)
 
     ~shaderfile() noexcept;
 
@@ -51,7 +47,7 @@ public:
     shader(const shaderfile::info* files, int num_files);
     shader(const shaderfile* files, int num_files);
 
-    GL_CLASS(shader, m_handle);
+    HANDLE_CLASS(shader, m_handle, 0);
 
     int get_uniform_loc(const char* name) {
         return glGetUniformLocation(m_handle, name);

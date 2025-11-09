@@ -44,7 +44,7 @@ public:
         m_root(nullptr)
     {}
 
-    MOVE_ONLY_CLASS(aabb_tree, m_root, nullptr)
+    HANDLE_CLASS(aabb_tree, m_root, nullptr)
 
     // Changes the order of the source array!
     static aabb_tree create_unsafe(std::span<T> objects) {
@@ -127,18 +127,17 @@ public:
                 bool inter = std::invoke(obj_intersect_cb, leaf->data, qdata);
                 if (inter && qdata.sqdist < best_qdata.sqdist) {
                     best_object = &leaf->data;
-                    best_qdata = qdata;
+                    best_qdata = std::move(qdata);
                 }
             }
         }
         if (best_object) {
             out_object = *best_object;
-            out_qdata = best_qdata;
+            out_qdata = std::move(best_qdata);
             return true;
         }
         else { return false; }
     }
-
 
     ~aabb_tree() {
         delete_tree(m_root);
@@ -187,7 +186,6 @@ private:
         auto& bbox = node->bbox;
         assert(radius_range.nonneg());
 
-        // Closest and furthest points from query to bbox
         double dmin2 = 0.0, dmax2 = 0.0;
         for (int i = 0; i < N; ++i) 
         {

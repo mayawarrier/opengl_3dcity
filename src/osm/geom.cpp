@@ -128,13 +128,13 @@ glm::dvec2 seg_normal(const segment& seg, direction dir, double width)
         glm::normalize(vec_perp(seg.second - seg.first));
 }
 
-static inline double cos_bw(glm::dvec2 a, glm::dvec2 b) {
+static inline double cos_angle_bw(glm::dvec2 a, glm::dvec2 b) {
     return glm::dot(a, b) / (glm::length(a) * glm::length(b));
 }
 
 double angle_bw(glm::dvec2 a, glm::dvec2 b)
 {
-    return std::acos(std::clamp(cos_bw(a, b), -1.0, 1.0));
+    return std::acos(std::clamp(cos_angle_bw(a, b), -1.0, 1.0));
 }
 
 double angle_bw_unitdirs(glm::dvec2 a, glm::dvec2 b)
@@ -144,7 +144,7 @@ double angle_bw_unitdirs(glm::dvec2 a, glm::dvec2 b)
 
 double min_angle_bw(glm::dvec2 a, glm::dvec2 b)
 {
-    return std::acos(std::abs(cos_bw(a, b)));
+    return std::acos(std::abs(cos_angle_bw(a, b)));
 }
 
 double min_angle_bw_unitdirs(glm::dvec2 a, glm::dvec2 b)

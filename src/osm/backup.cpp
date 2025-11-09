@@ -165,6 +165,7 @@ static way_net_paths get_all_paths_bw_intersections(way_net& network)
 // Instead of firing rays, can I find the projection of the footpath outline endpoints
 // on the street? This should give me the exact point where the street is no longer
 // covered by the footpath outlines. But how do I know which street segment to project on? Just try
+// covered by the footpath outlines. But how do I know which street segment to projection on? Just try
 // the last few segments on either side? And I need an algorithm to perform projection on segments,
 // not lines. Perpendicular projection? Unfortunately there might not be a perpendicular projection
 // because the footpath segments could be at various angles, especially at endpoints.
@@ -188,7 +189,7 @@ static way_net_paths get_all_paths_bw_intersections(way_net& network)
 // need to know which side to extend from.
 
 
-class st_outline_builder
+class street_outline_builder
 {
 public:
     struct outline_node
@@ -201,9 +202,11 @@ public:
             return { .id = n.id, .vert = n.vert };
         }
     };
+    using street_outlines_t = types::unord_flat_map<const way_net::path*, std::vector<outline_node>>;
 
-    st_outline_builder(const way_net_paths& all_paths, const aabb_tree2d<mesh_builder::building*>& bldg_tree) :
-        m_all_paths(all_paths), m_bldg_tree(bldg_tree)
+public:
+    street_outline_builder(const way_net_paths& all_paths, const aabb_tree2d<mesh_builder::building*>& bldg_tree) :
+        m_bldg_tree(bldg_tree)
     {
         m_footpath_segs = get_all_path_segments(all_paths.footpaths);
         m_street_segs = get_all_path_segments(all_paths.streets);
@@ -216,6 +219,75 @@ public:
             tree_objects.push_back(&seg);
         }
         m_seg_tree = aabb_tree2d<tree_path_seg*>::create_unsafe(tree_objects);
+        m_seg_tree = aabb_tree2d<tree_path_seg*>::create_unsafe(std::span(tree_objects));
+    }
+
+    street_outlines_t get_outlines(double eps)
+    {
+        tim::high_resolution_clock::duration ttotal_outlines(0);
+
+        auto tbegin_entries = std::chrono::high_resolution_clock::now();
+        auto entries = get_all_st_ft_outlines_from_streets(eps);
+        auto tend_entries = std::chrono::high_resolution_clock::now();
+
+        logMESSAGE("Street outline extraction time: %s", time_str(tend_entries - tbegin_entries).c_str());
+
+        street_outlines_t ret;
+        for (auto& st_entry : entries)
+        {
+            auto& street = st_entry.street;
+            auto& outlines = st_entry.outlines;
+
+            assert(!outlines.empty());
+
+            std::vector<const st_outline*> left_outlines, right_outlines;
+            for (auto& outline : outlines)
+            {
+                switch (outline.dir)
+                {
+                case DIR_LEFT:  left_outlines.push_back(&outline); break;
+                case DIR_RIGHT: right_outlines.push_back(&outline); break;
+                default:
+                    assert(false); break;
+                }
+            }
+
+            /*if (std::find_if(street->nodes.begin(), street->nodes.end(),
+                [](auto& n) { return n.id == 2155391486; }) != street->nodes.end()) {
+                logMESSAGE("here");
+            }*/
+
+            auto tbegin = std::chrono::high_resolution_clock::now();
+            auto lt_outline = fill_st_outline_holes(street, left_outlines, DIR_LEFT, eps);
+            auto rt_outline = fill_st_outline_holes(street, right_outlines, DIR_RIGHT, eps);
+            auto tend = std::chrono::high_resolution_clock::now();
+            ttotal_outlines += (tend - tbegin);
+
+            if (lt_outline.empty() || rt_outline.empty()) {
+                continue;
+            }
+
+            std::array<double, 4> dists = {
+                vec_sqlength(lt_outline.back().vert - rt_outline.front().vert),
+                vec_sqlength(lt_outline.back().vert - rt_outline.back().vert),
+                vec_sqlength(lt_outline.front().vert - rt_outline.front().vert),
+                vec_sqlength(lt_outline.front().vert - rt_outline.back().vert),
+            };
+
+            int min_distidx = int(std::min_element(dists.begin(), dists.end()) - dists.begin());
+            bool reverse_lt = get_bit(min_distidx, 1); // nasty
+            bool reverse_rt = get_bit(min_distidx, 0);
+
+            if (reverse_lt) { std::reverse(lt_outline.begin(), lt_outline.end()); }
+            if (reverse_rt) { std::reverse(rt_outline.begin(), rt_outline.end()); }
+
+            lt_outline.insert(lt_outline.end(), rt_outline.begin(), rt_outline.end());
+            ret[street] = std::move(lt_outline);
+        }
+
+        logMESSAGE("Street outline hole filling time: %s", time_str(ttotal_outlines).c_str());
+
+        return ret;
     }
 
 private:
@@ -298,6 +370,7 @@ private:
         }
     };
 
+    // ray.dir must be normalized!
     outline_proj get_street_proj(const glm::dvec2& sample, const tree_path_seg* src_tseg, double eps)
     {
         struct tree_qdata
@@ -308,54 +381,55 @@ private:
 
         auto dist_range = param_range{ 0.0, 20.0 };
 
+        auto cand_intersect_cb = [&](tree_path_seg* cand_tseg, tree_qdata& out_qdata) -> bool
+        {
+            if (cand_tseg->path == src_tseg->path) {
+                return false;
+            }
+
+            // check if footpath and street are somewhat parallel
+            //if (cand_tseg->way->type == WAY_TYPE_STREET)
+            //{
+            double angle_bw = min_angle_bw_unitdirs(src_tseg->udir, cand_tseg->udir);
+            if (std::abs(glm::degrees(angle_bw)) > 45.0) {
+                return false;
+            }
+            //}
+
+            segment seg = { cand_tseg->start.vert, cand_tseg->end.vert };
+
+            // project sample onto segment
+            glm::dvec2 ap = sample - seg.first;
+            glm::dvec2 ab = seg.second - seg.first;
+            double t = glm::dot(ap, ab) / glm::dot(ab, ab);
+
+            // reject if out of path bounds
+            int seg_pidx = cand_tseg->pathidx;
+            if ((t < 0 && seg_pidx == 0) ||
+                (t > 1.0 && seg_pidx == path_num_segs(cand_tseg->path) - 1)) {
+                return false;
+            }
+
+            double t_clamped = std::clamp(t, 0.0, 1.0);
+            double sqdist = vec_sqlength(sample - (seg.first + t_clamped * ab));
+
+            if (sqdist < dist_range.min2() || sqdist > dist_range.max2()) {
+                return false;
+            }
+
+            out_qdata = {
+                .sqdist = sqdist,
+                .pt_param = t // keep original
+            };
+            return true;
+        };
+
         tree_qdata hit_segdata{};
         tree_path_seg* hit_seg = nullptr;
+        bool hit = m_seg_tree.query_nearest(sample, dist_range, cand_intersect_cb, hit_seg, hit_segdata);
 
-        bool hit = m_seg_tree.query_nearest(sample, dist_range, 
-            [&](tree_path_seg* cand_tseg, tree_qdata& out_qdata) -> bool
-            {
-                if (cand_tseg->path == src_tseg->path) {
-                    return false;
-                }
-
-                // check if footpath and street are somewhat parallel
-                if (cand_tseg->way->type == WAY_TYPE_STREET) {
-                    double angle_bw = min_angle_bw_unitdirs(src_tseg->udir, cand_tseg->udir);
-                    if (std::abs(glm::degrees(angle_bw)) > 45.0) {
-                        return false;
-                    }
-                }
-
-                segment seg = { cand_tseg->start.vert, cand_tseg->end.vert };
-
-                // project sample onto segment
-                glm::dvec2 ap = sample - seg.first;
-                glm::dvec2 ab = seg.second - seg.first;
-                double t = glm::dot(ap, ab) / glm::dot(ab, ab);
-
-                // reject if out of path bounds
-                int seg_pidx = cand_tseg->pathidx;
-                if ((t < 0 && seg_pidx == 0) ||
-                    (t > 1.0 && seg_pidx == path_num_segs(cand_tseg->path) - 1)) {
-                    return false;
-                }
-
-                double t_clamped = std::clamp(t, 0.0, 1.0);
-                double sqdist = vec_sqlength(sample - (seg.first + t_clamped * ab));
-
-                if (sqdist < dist_range.min2() || sqdist > dist_range.max2()) {
-                    return false;
-                }
-
-                out_qdata = {
-                    .sqdist = sqdist,
-                    .pt_param = t // keep original
-                };
-                return true;
-            }, 
-            hit_seg, hit_segdata);
-
-        if (hit && hit_seg->way->type == WAY_TYPE_STREET) {
+        if (hit && hit_seg->way->type == WAY_TYPE_STREET) 
+        {
             return {
                 .street = hit_seg->path,
                 .proj = {
@@ -406,16 +480,25 @@ private:
             glm::dvec2 fseg_vec = fseg.end.vert - fseg.start.vert;
             glm::dvec2 fseg_perp_dir = glm::normalize(vec_perp(fseg_vec));
 
-            int num_samples = std::max(1, int(std::ceil(fseg.length / SAMPLE_INTERVAL - eps))) + 1;
+            double seg_length = glm::length(fseg_vec);
+            int num_samples = std::max(1, int(std::ceil(seg_length / SAMPLE_INTERVAL - eps))) + 1;
+
             for (int i = 0; i < num_samples; ++i) {
-                samples.push_back(fseg.start.vert + (double(i) / (num_samples - 1)) * fseg_vec);
+                samples.push_back(fseg.start.vert + (double(i) / num_samples) * fseg_vec);
             }
 
             //for (glm::dvec2 ray_dir : { fseg_perp_dir, -fseg_perp_dir })
             //{
+                if (fseg.way->id == 366054816) {
+                    logMESSAGE("debug");
+                }
 
                 for (int i = 0; i < num_samples; ++i) {
                     projs.push_back(get_street_proj(samples[i], &fseg, eps));
+                }
+
+                if (fseg.way->id == 366054816) {
+                    logMESSAGE("debug");
                 }
 
                 int rayidx = 0;
@@ -644,14 +727,14 @@ private:
                 return false;
             },
             hit_seg, hit_segdata);
-        
+
         if (hit && hit_seg->way->type == WAY_TYPE_FOOTWAY) {
             return {
                 .fseg = hit_seg,
                 .point = hit_segdata.point
             };
         }
-    
+
         return ray_hit::no_hit();
     };
 
@@ -659,97 +742,241 @@ private:
     {
         static constexpr double RAYCAST_INTERVAL = 1; // meters
 
-        struct raydata
+        struct outline_piece
         {
-            double t;
-            glm::dvec2 orig;
-            ray_hit hit;
+            std::vector<outline_node> nodes;
+            outline_proj::data start_proj, end_proj;
+            direction dir;
+            int sseg_gidx; // street segment global index
         };
 
-        std::vector<raydata> raybuf; // reused
+        std::vector<std::pair<double, glm::dvec2>> ray_origins;
+        std::vector<ray_hit> ray_hits;
+
         std::vector<st_outlines_entry> ret;
+        for (auto& sseg : m_street_segs)
+        // Map from street path to all outline pieces for that street
+        types::unord_flat_map<const way_net::path*, std::vector<outline_piece>> street_pieces_map;
 
-        // todo: go through the segments to find the segments corresponding to their street paths
-        // For every street path, add some number of outlines on the left and some on the right
-        // the pieces can just be appended to the left/right outlines for the street path, with no joining required
-
-        int seg_gidx = 0;
-        for (auto& street : m_all_paths.streets)
+        for (size_t sseg_gidx = 0; sseg_gidx < m_street_segs.size(); ++sseg_gidx)
         {
-            st_outlines_entry st_entry;
+            auto& sseg = m_street_segs[sseg_gidx];
+            
+            glm::dvec2 sseg_vec = sseg.end.vert - sseg.start.vert;
+            glm::dvec2 sseg_perp_dir = glm::normalize(vec_perp(sseg_vec));
 
-            for (int i = 0; i < path_num_segs(&street); ++i)
+            int num_rays = std::max(1, int(std::ceil(sseg.length / RAYCAST_INTERVAL - eps))) + 1;
+            for (int i = 0; i < num_rays; ++i) 
             {
-                tree_path_seg& sseg = m_street_segs[seg_gidx++];
-                glm::dvec2 sseg_vec = sseg.end.vert - sseg.start.vert;
-                glm::dvec2 sseg_perp_dir = glm::normalize(vec_perp(sseg_vec));
+                double t = double(i) / (num_rays - 1);
+                ray_origins.push_back({ t, sseg.start.vert + t * sseg_vec });
+            }
 
-                int num_rays = std::max(1, int(std::ceil(sseg.length / RAYCAST_INTERVAL - eps))) + 1;
+            std::array<std::pair<direction, glm::dvec2>, 2> ray_dirs = {{
+                { DIR_LEFT, sseg_perp_dir },
+                { DIR_RIGHT, -sseg_perp_dir }
+            }};
+
+            for (const auto& dir : ray_dirs)
+            {
+                if (sseg.way->id == 634716097) {
+                    logMESSAGE("debug");
+                }
+
+
                 for (int i = 0; i < num_rays; ++i) {
-                    double t = double(i) / (num_rays - 1);
-                    raybuf.push_back({ .t = t, .orig = sseg.start.vert + t * sseg_vec });
+                    ray2d ray{ .origin = ray_origins[i].second, .dir = dir.second };
+                    ray_hits.push_back(get_ft_hit(ray, &sseg, eps));
                 }
 
-                // cast rays on both sides
-                for (direction dir : { DIR_LEFT, DIR_RIGHT })
+                if (sseg.way->id == 634716097) {
+                    logMESSAGE("debug");
+                }
+
+
+                int rayidx = 0;
+                while (rayidx < num_rays)
                 {
-                    glm::dvec2 dirvec = (dir == DIR_LEFT) ? sseg_perp_dir : -sseg_perp_dir;
-
-                    for (int i = 0; i < num_rays; ++i) {
-                        ray2d ray{ .origin = raybuf[i].orig, .dir = dirvec };
-                        raybuf[i].hit = get_ft_hit(ray, &sseg, eps);
+                    // get largest outlines
+                    int pc_startidx = rayidx;
+                    while (pc_startidx < num_rays && !ray_hits[pc_startidx].fseg) {
+                        pc_startidx++;
+                    }
+                    int pc_endidx = pc_startidx + 1;
+                    while (pc_endidx < num_rays && ray_hits[pc_endidx].fseg &&
+                        ray_hits[pc_endidx].fseg->path == ray_hits[pc_startidx].fseg->path) {
+                        pc_endidx++;
                     }
 
-                    int rayidx = 0;
-                    while (rayidx < num_rays)
+                    if (pc_startidx < num_rays && pc_endidx - pc_startidx > 1)
                     {
-                        // get largest piece that hits the same footpath segment
-                        int pc_startidx = rayidx;
-                        while (pc_startidx < num_rays && !raybuf[pc_startidx].hit.fseg) {
-                            pc_startidx++;
+                        /*outline_piece piece;
+                        piece.seg = &fseg;
+
+                        if (pc_startidx == 0) {
+                            piece.start = outline_node::osm(fseg.start);
                         }
-                        int pc_endidx = pc_startidx + 1;
-                        while (pc_endidx < num_rays && raybuf[pc_endidx].hit.fseg &&
-                            raybuf[pc_endidx].hit.fseg == raybuf[pc_startidx].hit.fseg) {
-                            pc_endidx++;
+                        else {
+                            piece.start.id = -1;
+                            piece.start.vert = samples[pc_startidx];
+                        }
+                        if (pc_endidx == num_rays) {
+                            piece.end = outline_node::osm(fseg.end);
+                        }
+                        else {
+                            piece.end.id = -1;
+                            piece.end.vert = samples[pc_endidx - 1];
                         }
 
-                        if (pc_startidx < num_rays && pc_endidx - pc_startidx > 1)
+                        piece.start_proj = ray_hits[pc_startidx].proj;
+                        piece.end_proj = ray_hits[pc_endidx - 1].proj;
+
+                        int piece_id = int(pieces.size());
+                        auto* hit_st = ray_hits[pc_startidx].street;
+
+                        pieces.push_back(piece);
+                        fseg_piece_ids[&fseg].push_back(piece_id);
+                        street_piece_ids[hit_st].insert(piece_id);*/
+
+                        st_outlines_entry* entry;
+                        if (!ret.empty() && ret.back().street == sseg.path) {
+                            entry = &ret.back();
+                        } else {
+                            entry = &ret.emplace_back();
+                            entry->street = sseg.path;
+                        }
+
+                        st_outline outline;
+                        outline.dir = dir.first;
+                        outline.start_proj = {
+                        outline_piece piece;
+                        piece.dir = dir.first;
+                        piece.sseg_gidx = int(sseg_gidx);
+                        piece.start_proj = {
+                            .pt_param = ray_origins[pc_startidx].first,
+                            .seg_pidx = sseg.pathidx
+                        };
+                        outline.end_proj = {
+                        piece.end_proj = {
+                            .pt_param = ray_origins[pc_endidx - 1].first,
+                            .seg_pidx = sseg.pathidx
+                        };
+                        for (int ri = pc_startidx; ri < pc_endidx; ++ri) {
+                            outline.nodes.push_back({
+                            piece.nodes.push_back({
+                                .id = -1,
+                                .vert = ray_hits[ri].point
+                            });
+                        }
+
+                        // ensure start_proj is before end_proj
+                        auto& sp = outline.start_proj, & ep = outline.end_proj;
+                        auto& sp = piece.start_proj, & ep = piece.end_proj;
+                        if (sp.seg_pidx > ep.seg_pidx ||
+                            (sp.seg_pidx == ep.seg_pidx && sp.pt_param > ep.pt_param))
                         {
-                            // if the last piece was on the previous segment of the same 
-
-                            st_outline outline;
-                            outline.dir = dir;
-
-                            outline.start_proj = {
-                                .pt_param = raybuf[pc_startidx].t,
-                                .seg_pidx = sseg.pathidx
-                            };
-                            outline.end_proj = {
-                                .pt_param = raybuf[pc_endidx - 1].t,
-                                .seg_pidx = sseg.pathidx
-                            };
-
-                            outline.nodes.push_back({ .id = -1, .vert = raybuf[pc_startidx].hit.point });
-                            outline.nodes.push_back({ .id = -1, .vert = raybuf[pc_endidx - 1].hit.point });
-
-                            // ensure start_proj is before end_proj
-                            auto& sp = outline.start_proj, & ep = outline.end_proj;
-                            if (sp.seg_pidx > ep.seg_pidx ||
-                                (sp.seg_pidx == ep.seg_pidx && sp.pt_param > ep.pt_param))
-                            {
-                                std::reverse(outline.nodes.begin(), outline.nodes.end());
-                                std::swap(sp, ep);
-                            }
+                            std::reverse(outline.nodes.begin(), outline.nodes.end());
+                            std::reverse(piece.nodes.begin(), piece.nodes.end());
+                            std::swap(sp, ep);
                         }
 
-                        rayidx = pc_endidx;
+                        entry->outlines.push_back(std::move(outline));
+                        street_pieces_map[sseg.path].push_back(std::move(piece));
+                    }
+
+                    rayidx = pc_endidx;
+                }
+
+                ray_hits.clear();
+            }
+
+            ray_origins.clear();
+            ray_hits.clear();
+        }
+
+        // Now join adjacent pieces for each street
+        std::vector<st_outlines_entry> ret;
+        for (auto& [street, pieces] : street_pieces_map)
+        {
+            if (pieces.empty()) continue;
+
+            auto& entry = ret.emplace_back();
+            entry.street = street;
+
+            // Sort pieces by direction, then segment index, then start parameter
+            std::sort(pieces.begin(), pieces.end(), 
+                [](const outline_piece& lhs, const outline_piece& rhs)
+            {
+                if (lhs.dir != rhs.dir) return lhs.dir < rhs.dir;
+                if (lhs.start_proj.seg_pidx != rhs.start_proj.seg_pidx) {
+                    return lhs.start_proj.seg_pidx < rhs.start_proj.seg_pidx;
+                }
+                return lhs.start_proj.pt_param < rhs.start_proj.pt_param;
+            });
+
+            // Join adjacent pieces with same direction
+            std::vector<bool> piece_used(pieces.size(), false);
+            for (size_t i = 0; i < pieces.size(); ++i)
+            {
+                if (piece_used[i]) continue;
+
+                st_outline outline;
+                outline.dir = pieces[i].dir;
+                outline.start_proj = pieces[i].start_proj;
+                outline.end_proj = pieces[i].end_proj;
+                outline.nodes = pieces[i].nodes;
+                piece_used[i] = true;
+
+                // Try to extend forward by joining adjacent pieces
+                bool extended = true;
+                while (extended)
+                {
+                    extended = false;
+                    for (size_t j = i + 1; j < pieces.size(); ++j)
+                    {
+                        if (piece_used[j] || pieces[j].dir != outline.dir) continue;
+
+                        // Check if pieces are adjacent
+                        bool adjacent = false;
+                        
+                        // Same segment - check if they're consecutive in parameter
+                        if (pieces[j].start_proj.seg_pidx == outline.end_proj.seg_pidx &&
+                            std::abs(pieces[j].start_proj.pt_param - outline.end_proj.pt_param) < 0.01) 
+                        {
+                            adjacent = true;
+                        }
+                        // Adjacent segments - check if end is at segment boundary
+                        else if (pieces[j].sseg_gidx == m_street_segs[pieces[i].sseg_gidx].next_seg_gidx &&
+                                 pieces[j].start_proj.seg_pidx == outline.end_proj.seg_pidx + 1 &&
+                                 outline.end_proj.pt_param > 0.99 && 
+                                 pieces[j].start_proj.pt_param < 0.01) 
+                        {
+                            adjacent = true;
+                        }
+
+                        if (adjacent)
+                        {
+                            // Join the pieces
+                            outline.nodes.insert(outline.nodes.end(), 
+                                pieces[j].nodes.begin(), pieces[j].nodes.end());
+                            outline.end_proj = pieces[j].end_proj;
+                            piece_used[j] = true;
+                            extended = true;
+                            break;
+                        }
                     }
                 }
 
-                raybuf.clear();
+                if (outline.nodes.size() >= 2) {
+                    entry.outlines.push_back(std::move(outline));
+                }
+            }
+
+            if (entry.outlines.empty()) {
+                ret.pop_back();
             }
         }
+
         return ret;
     }
 
@@ -856,78 +1083,7 @@ private:
         return ret;
     }
 
-public:
-    using street_outlines_t = types::unord_flat_map<const way_net::path*, std::vector<outline_node>>;
-
-    street_outlines_t build_outlines(double eps)
-    {
-        tim::high_resolution_clock::duration ttotal_outlines(0);
-
-        auto tbegin_entries = std::chrono::high_resolution_clock::now();
-        auto entries = get_all_st_ft_outlines_from_streets(eps);
-        auto tend_entries = std::chrono::high_resolution_clock::now();
-
-        logMESSAGE("Street outline extraction time: %s", time_str(tend_entries - tbegin_entries).c_str());
-
-        street_outlines_t ret;
-        for (auto& st_entry : entries)
-        {
-            auto& street = st_entry.street;
-            auto& outlines = st_entry.outlines;
-
-            assert(!outlines.empty());
-
-            std::vector<const st_outline*> left_outlines, right_outlines;
-            for (auto& outline : outlines)
-            {
-                switch (outline.dir)
-                {
-                case DIR_LEFT:  left_outlines.push_back(&outline); break;
-                case DIR_RIGHT: right_outlines.push_back(&outline); break;
-                default: assert(false); break;
-                }
-            }
-
-            //if (std::find_if(street->nodes.begin(), street->nodes.end(),
-            //    [](auto& n) { return n.id == 2155391486; }) != street->nodes.end()) {
-            //    logMESSAGE("here");
-            //}
-
-            auto tbegin = std::chrono::high_resolution_clock::now();
-            auto lt_outline = fill_st_outline_holes(street, left_outlines, DIR_LEFT, eps);
-            auto rt_outline = fill_st_outline_holes(street, right_outlines, DIR_RIGHT, eps);
-            auto tend = std::chrono::high_resolution_clock::now();
-            ttotal_outlines += (tend - tbegin);
-
-            if (lt_outline.empty() || rt_outline.empty()) {
-                continue;
-            }
-
-            std::array<double, 4> dists = {
-                vec_sqlength(lt_outline.back().vert - rt_outline.front().vert),
-                vec_sqlength(lt_outline.back().vert - rt_outline.back().vert),
-                vec_sqlength(lt_outline.front().vert - rt_outline.front().vert),
-                vec_sqlength(lt_outline.front().vert - rt_outline.back().vert),
-            };
-
-            int min_distidx = int(std::min_element(dists.begin(), dists.end()) - dists.begin());
-            bool reverse_lt = get_bit(min_distidx, 1); // nasty
-            bool reverse_rt = get_bit(min_distidx, 0);
-
-            if (reverse_lt) { std::reverse(lt_outline.begin(), lt_outline.end()); }
-            if (reverse_rt) { std::reverse(rt_outline.begin(), rt_outline.end()); }
-
-            lt_outline.insert(lt_outline.end(), rt_outline.begin(), rt_outline.end());
-            ret[street] = std::move(lt_outline);
-        }
-
-        logMESSAGE("Street outline hole filling time: %s", time_str(ttotal_outlines).c_str());
-
-        return ret;
-    }
-
 private:
-    const way_net_paths& m_all_paths;
     std::vector<tree_path_seg> m_footpath_segs;
     std::vector<tree_path_seg> m_street_segs;
     aabb_tree2d<tree_path_seg*> m_seg_tree;
@@ -946,7 +1102,7 @@ static void gen_path_drawdata(draw_datad& dd, const way_net::path& path, double 
     polyline_triangulate(verts, path.nodes[1].in_way->width, dd, eps);
 }
 
-static bool gen_outline_drawdata(draw_datad& dd, const std::vector<st_outline_builder::outline_node>& outline)
+static bool gen_outline_drawdata(draw_datad& dd, const std::vector<street_outline_builder::outline_node>& outline)
 {
     std::vector<glm::dvec2> outline_verts;
 
@@ -1030,9 +1186,10 @@ bool mesh_builder::gen_street_drawdata(std::vector<draw_datad>& drawdata, const 
     logMESSAGE("Street path extraction took: %s", time_str(tend_paths - tbegin_paths).c_str());
 
     constexpr double eps = 1e-9;
-    st_outline_builder st_builder(all_paths, *bldg_tree_ptr);
-    auto st_outlines = st_builder.build_outlines(eps);
+    street_outline_builder st_outline_builder(all_paths, *bldg_tree_ptr);
+    auto st_outlines_map = st_outline_builder.get_outlines(eps);
     
+
     draw_datad footpath_dd{ 
         .name = "footpaths",
         .color = glm::vec4(0.3f, 0.3f, 0.3f, 1.0f)
@@ -1041,10 +1198,10 @@ bool mesh_builder::gen_street_drawdata(std::vector<draw_datad>& drawdata, const 
         .name = "streets",
         .color = glm::vec4(0.7f, 0.7f, 0.7f, 1.0f)
     };
-    draw_datad debug_dd{
-        .name = "debug",
-        .color = glm::vec4(1.0f, 0.f, 0.f, 1.f)
-    };
+    //draw_datad debug_dd{
+    //    .name = "debug",
+    //    .color = glm::vec4(1.0f, 0.f, 0.f, 1.f)
+    //};
 
     for (const auto& footpath : all_paths.footpaths) {
         gen_path_drawdata(footpath_dd, footpath, eps);
@@ -1054,31 +1211,11 @@ bool mesh_builder::gen_street_drawdata(std::vector<draw_datad>& drawdata, const 
 
     for (const auto& street : all_paths.streets) 
     {
-        auto outline_map_itr = st_outlines.find(&street);
+        auto outline_map_itr = st_outlines_map.find(&street);
 
-        if (outline_map_itr == st_outlines.end()) {
+        if (outline_map_itr == st_outlines_map.end()) {
             gen_path_drawdata(street_dd, street, eps);
         } else {
-            //if (std::find_if(street.nodes.begin(), street.nodes.end(),
-            //    [](auto& n) { return n.id == 2155391486; }) != street.nodes.end()) {
-            //    
-            //    // make a debug_dd of the outline
-            //    for (const auto& node : outline_map_itr->second) {
-            //        debug_dd.add_vertex({ node.vert.x, node.vert.y, 0.0 });
-            //    }
-            //    for (const auto& node : outline_map_itr->second) {
-            //        debug_dd.add_vertex({ node.vert.x, node.vert.y, 1.0 });
-            //    }
-            //    // add triangles for the sides
-            //    uint32_t base_idx = uint32_t(debug_dd.num_verts() / 2);
-            //    for (size_t i = 0; i < outline_map_itr->second.size(); ++i)
-            //    {
-            //        uint32_t next_i = (i + 1) % outline_map_itr->second.size();
-            //        debug_dd.add_triangle_w_offset(uint32_t(i), uint32_t(next_i), uint32_t(base_idx + next_i), 0);
-            //        debug_dd.add_triangle_w_offset(uint32_t(i), uint32_t(base_idx + next_i), uint32_t(base_idx + i), 0);
-            //    }
-            //}
-
             auto tbegin = clk::now();
             gen_outline_drawdata(street_dd, outline_map_itr->second);
             auto tend = clk::now();
@@ -1090,7 +1227,7 @@ bool mesh_builder::gen_street_drawdata(std::vector<draw_datad>& drawdata, const 
 
     drawdata.push_back(std::move(footpath_dd));
     drawdata.push_back(std::move(street_dd));
-    drawdata.push_back(std::move(debug_dd));
+    //drawdata.push_back(std::move(debug_dd));
 
     auto tend = clk::now();
 

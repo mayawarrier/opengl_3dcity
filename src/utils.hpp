@@ -59,7 +59,7 @@ template <typename...>
 struct deferred_false : std::false_type {};
 
 // Disable copy and enable move semantics for a class with a single handle member.
-#define MOVE_ONLY_CLASS(classname, handlename, handlenull)           \
+#define HANDLE_CLASS(classname, handlename, handlenull)           \
     classname(const classname&) = delete;                            \
     classname& operator=(const classname&) = delete;                 \
                                                                      \
