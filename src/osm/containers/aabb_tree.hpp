@@ -51,14 +51,14 @@ public:
         return { objects };
     }
 
-    std::vector<T> query_bbox_all(const bbox<N>& bbox) const
+    std::vector<T> query_bbox_all(const bbox<N>& query_bbox) const
     {
         std::vector<T> ret;
         // Good for trees with upto 2^16 objects.
         types::small_vector<const node*, 16> nodes;
 
         auto check_subtree = [&](const node* node) {
-            if (node && bbox_intersects_bbox(node->bbox, bbox))
+            if (node && bbox_intersects_bbox(node->bbox, query_bbox))
                 nodes.push_back(node);
         };
 

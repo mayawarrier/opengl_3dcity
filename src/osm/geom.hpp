@@ -16,10 +16,10 @@
 
 // Get a vector perpendicular to the input i.e. cross(z, vec).
 // Applies a 90 degree CCW rotation.
-inline glm::dvec2 vec_perp(glm::dvec2 vec) { return { -vec.y, vec.x }; }
+inline glm::dvec2 vec_perp(const glm::dvec2& vec) { return { -vec.y, vec.x }; }
 
 // Get the squared length of a vector.
-inline double vec_sqlength(glm::dvec2 vec) { return glm::dot(vec, vec); }
+inline double vec_sqlength(const glm::dvec2& vec) { return glm::dot(vec, vec); }
 
 // Get the index of the minimum element in a vector.
 template <int N, typename T>
@@ -99,19 +99,19 @@ glm::dvec2 seg_normal(const segment& seg, direction dir, double width);
 
 // Get unoriented angle between two vectors (in radians).
 // Returns value in [0, pi].
-double angle_bw(glm::dvec2 a, glm::dvec2 b);
+double angle_bw(const glm::dvec2& a, const glm::dvec2& b);
 
 // Get unoriented angle between two normalized vectors (in radians).
 // Returns value in [0, pi].
-double angle_bw_unitdirs(glm::dvec2 a, glm::dvec2 b);
+double angle_bw_unitdirs(const glm::dvec2& a, const glm::dvec2& b);
 
 // Get minimum unoriented angle between two vectors (in radians).
 // Returns value in [0, pi/2].
-double min_angle_bw(glm::dvec2 a, glm::dvec2 b);
+double min_angle_bw(const glm::dvec2& a, const glm::dvec2& b);
 
 // Get minimum unoriented angle between two normalized vectors (in radians).
 // Returns value in [0, pi/2].
-double min_angle_bw_unitdirs(glm::dvec2 a, glm::dvec2 b);
+double min_angle_bw_unitdirs(const glm::dvec2& a, const glm::dvec2& b);
 
 // Get minimum angle between two segments (in radians).
 // Returns value in [0, pi/2].
@@ -122,7 +122,7 @@ inline double min_angle_bw_segs(const segment& seg1, const segment& seg2)
     return min_angle_bw(dir1, dir2);
 }
 
-inline orient_t classify_orient(double value)
+inline orient_t orient_type(double value)
 {
     if (value > 0) {
         return ORIENT_CCW;
@@ -134,10 +134,10 @@ inline orient_t classify_orient(double value)
 }
 
 // Get orientation of points wrt to each other.
-inline orient_t orient(glm::dvec2 a, glm::dvec2 b, glm::dvec2 c)
+inline orient_t orient(const glm::dvec2& a, const glm::dvec2& b, const glm::dvec2& c)
 {
     glm::dvec2 v = b - a, w = c - a;
-    return classify_orient(v.x * w.y - v.y * w.x);
+    return orient_type(v.x * w.y - v.y * w.x);
 }
 
 // Get orientation of polygon.

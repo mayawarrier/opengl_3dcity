@@ -66,10 +66,10 @@ window::window(const char* name, const char* title, ::size<int> size, bool fulls
         size = info.size;
         disp_idx = info.disp_idx;
         window_flags |= SDL_WINDOW_FULLSCREEN;
-
-        logMESSAGE("Using display %d (%s) with size %d x %d", 
-            disp_idx, SDL_GetDisplayName(disp_idx), size.width, size.height);
     }
+
+    logMESSAGE("Using display %d (%s) with size %d x %d",
+        disp_idx, SDL_GetDisplayName(disp_idx), size.width, size.height);
 
     this->m_window = SDL_CreateWindow(title,
         SDL_WINDOWPOS_CENTERED_DISPLAY(disp_idx), 
@@ -97,9 +97,9 @@ window::window(const char* name, const char* title, ::size<int> size, bool fulls
     // for the context they were loaded in. If multiple windows
     // are required, I might need glad2 to get multi-context support
     gladLoadGLLoader(SDL_GL_GetProcAddress);
-    logMESSAGE("OpenGL Vendor:   %s", glGetString(GL_VENDOR));
-    logMESSAGE("OpenGL Renderer: %s", glGetString(GL_RENDERER));
-    logMESSAGE("OpenGL Version:  %s", glGetString(GL_VERSION));
+    logMESSAGE("GL Vendor:   %s", glGetString(GL_VENDOR));
+    logMESSAGE("GL Renderer: %s", glGetString(GL_RENDERER));
+    logMESSAGE("GL Version:  %s", glGetString(GL_VERSION));
 
     if (GLVersion.major < want_glversion.major ||
         (GLVersion.major == want_glversion.major && GLVersion.minor < want_glversion.minor)) {

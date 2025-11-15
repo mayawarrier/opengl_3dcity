@@ -94,6 +94,7 @@ private:
     std::vector<building> m_buildings;
     std::vector<building_part> m_building_parts;
     std::vector<highway> m_highways;
+    std::size_t m_num_highway_nodes = 0;
 };
 
 #endif
