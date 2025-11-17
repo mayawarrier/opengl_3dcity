@@ -1235,3 +1235,90 @@ bool mesh_builder::gen_street_drawdata(std::vector<draw_datad>& drawdata, const 
 
     return true;
 }
+
+// Compute the union of a set of 2D polygons.
+// Vertex type is expected to be glm::dvec2.
+void polygon_union_2d(const auto& in_polygons, auto& out_polygons)
+{
+    namespace bg = boost::geometry;
+    using point_t = bg::model::d2::point_xy<double>;
+    using polygon_t = bg::model::polygon<point_t>;
+    using multi_polygon_t = bg::model::multi_polygon<polygon_t>;
+
+    multi_polygon_t bg_result;
+    for (const auto& poly_verts : in_polygons)
+    {
+        polygon_t bg_poly;
+        for (const auto& v : poly_verts) {
+            bg::append(bg_poly, point_t(v.x, v.y));
+        }
+        bg::correct(bg_poly);
+        multi_polygon_t bg_union_result;
+        bg::union_(bg_result, bg_poly, bg_union_result);
+        bg_result = std::move(bg_union_result);
+    }
+
+    out_polygons.clear();
+    for (const auto& bg_poly : bg_result)
+    {
+        std::vector<glm::dvec2> poly_verts;
+        for (const auto& bg_pt : bg_poly.outer()) {
+            poly_verts.push_back({ bg_pt.x(), bg_pt.y() });
+        }
+        out_polygons.push_back(std::move(poly_verts));
+    }
+}
+
+static draw_datad merge_building_parts(const mesh_builder::building& building)
+{
+    if (building.base.id == 668372121) {
+        logMESSAGE("debug");
+    }
+
+    draw_datad dd;
+    dd.color = glm::vec4(0.5f, 0.5f, 0.5f, 1.0f);
+    dd.name = building.name;
+
+    types::small_flat_set<double, 16> htlevels_set;
+    for (auto* part : building.parts) {
+        htlevels_set.insert(part->ht_btm);
+        htlevels_set.insert(part->ht_top);
+    }
+    types::small_vector<double, 16> htlevels(htlevels_set.begin(), htlevels_set.end());
+
+    struct layer
+    {
+        using multipoly_t = types::small_vector<std::vector<glm::dvec2>, 4>;
+        multipoly_t polys;
+        double ht_btm, ht_top;
+    };
+
+    std::vector<layer> merged_layers;
+    for (size_t ilayer = 0; ilayer < htlevels.size() - 1; ++ilayer)
+    {
+        double layer_ht_btm = htlevels[ilayer];
+        double layer_ht_top = htlevels[ilayer + 1];
+
+        types::small_vector<std::span<const glm::dvec2>, 16> layer_polys;
+        types::small_vector<const mesh_builder::building_part*, 16> layer_parts; // debugging
+
+        for (const auto* part : building.parts) {
+            if (layer_ht_btm >= part->ht_btm && layer_ht_top <= part->ht_top) {
+                layer_parts.push_back(part);
+                layer_polys.push_back(part->verts);
+            }
+        }
+
+        layer::multipoly_t merged_polys;
+        polygon_union_2d(layer_polys, merged_polys);
+
+        // todo: merge with previous layer if identical
+        merged_layers.push_back({
+            .polys = std::move(merged_polys),
+            .ht_btm = layer_ht_btm,
+            .ht_top = layer_ht_top,
+            });
+    }
+
+    return dd;
+}

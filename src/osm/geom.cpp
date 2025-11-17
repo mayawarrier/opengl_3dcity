@@ -1,5 +1,7 @@
 
-#include <boost/geometry.hpp>
+#include <array>
+
+#include <clipper2/clipper.h>
 #include <mapbox/earcut.hpp>
 
 #define GLM_ENABLE_EXPERIMENTAL 1
@@ -82,45 +84,7 @@ seg_project_result seg_project_point(const segment& seg, glm::dvec2 point)
     };
 }
 
-bool polygon_covered_by(std::span<const glm::dvec2> inner, std::span<const glm::dvec2> outer)
-{
-    namespace bg = boost::geometry;
-    using point_t = bg::model::d2::point_xy<double>;
-    using polygon_t = bg::model::polygon<point_t>;
 
-    polygon_t bg_outer;
-    for (size_t i = 0; i < outer.size(); ++i) {
-        bg::append(bg_outer, point_t(outer[i].x, outer[i].y));
-    }
-
-    for (size_t i = 0; i < inner.size(); ++i) {
-        if (!bg::covered_by(point_t(inner[i].x, inner[i].y), bg_outer)) {
-            return false;
-        }
-    }
-
-    // Check for intersections between polygon edges.
-    // Check only for proper intersections to avoid rejecting cases
-    // where the inner polygon is on the border of the outer polygon - 
-    // there are some weird cases where this will produce false positives
-    // but they are unlikely.
-    for (size_t icurB = 0; icurB < inner.size(); ++icurB)
-    {
-        size_t inextB = (icurB + 1) % inner.size();
-        for (size_t icurA = 0; icurA < outer.size(); ++icurA)
-        {
-            size_t inextA = (icurA + 1) % outer.size();
-
-            segment segA{ outer[icurA], outer[inextA] };
-            segment segB{ inner[icurB], inner[inextB] };
-
-            if (seg_proper_intersect(segA, segB)) {
-                return false;
-            }
-        }
-    }
-    return true;
-}
 
 glm::dvec2 seg_normal(const segment& seg, direction dir, double width)
 {
@@ -153,17 +117,66 @@ double min_angle_bw_unitdirs(const glm::dvec2& a, const glm::dvec2& b)
 }
 
 // https://en.wikipedia.org/wiki/Shoelace_formula
-orient_t polygon_orient(std::span<const glm::dvec2> verts)
+orient_t path_orient(std::span<const glm::dvec2> verts)
 {
     double orient = 0.0;
-    for (size_t icur = 0; icur < verts.size(); ++icur) 
+    for (size_t icur = 0; icur < verts.size(); ++icur)
     {
         size_t inext = (icur + 1) % verts.size();
         double term1 = verts[icur].y + verts[inext].y;
-        double term2 = verts[icur].x - verts[inext].x;       
+        double term2 = verts[icur].x - verts[inext].x;
         orient += term1 * term2;
     }
     return orient_type(orient);
+}
+
+static Clipper2Lib::PathsD get_clipper_poly(polygon_cspan in_poly, bbox2d& bbox)
+{
+    using namespace Clipper2Lib;
+    
+    PathsD clpoly;
+    for (const auto& ring : in_poly) {
+        PathD path;
+        for (const auto& v : ring) {
+            path.push_back(PointD{ v.x, v.y });
+            bbox.extend(v);
+        }
+        clpoly.push_back(std::move(path));
+    }
+    
+    // outer ring must be CCW
+    if (!IsPositive(clpoly[0])) {
+        std::reverse(clpoly[0].begin(), clpoly[0].end());
+    }
+    // inner rings must be CW
+    for (size_t iring = 1; iring < clpoly.size(); ++iring) {
+        if (IsPositive(clpoly[iring])) {
+            std::reverse(clpoly[iring].begin(), clpoly[iring].end());
+        }
+    }
+    return clpoly;
+}
+
+bool polygon_covered_by(polygon_cspan inner, polygon_cspan outer)
+{
+    using namespace Clipper2Lib;
+
+    bbox2d bbox;
+    PathsD clip_path = get_clipper_poly(outer, bbox);
+    PathsD subj_path = get_clipper_poly(inner, bbox);
+
+    auto bb_center = bbox.center();
+    for (auto* paths : { &subj_path, &clip_path }) {
+        for (auto& path : *paths) {
+            for (auto& pt : path) {
+                pt.x -= bb_center.x;
+                pt.y -= bb_center.y;
+            }
+        }
+    }
+
+    PathsD solution = Difference(subj_path, clip_path, FillRule::NonZero, 8);
+    return solution.empty() || Area(solution[0]) < 1e-2;
 }
 
 // Earcut extension

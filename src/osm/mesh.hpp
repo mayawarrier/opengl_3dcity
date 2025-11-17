@@ -3,9 +3,12 @@
 
 #include <string>
 #include <vector>
+#include <variant>
 
 #include <osmium/osm/types.hpp>
+#include <osmium/memory/item_iterator.hpp>
 #include <osmium/fwd.hpp>
+#include <boost/unordered/unordered_flat_map.hpp>
 
 #include "containers/fwd.hpp"
 #include "common.hpp"
@@ -16,23 +19,20 @@
 class mesh_builder
 {
 public:
-    struct way_info
-    {
-        osmium::object_id_type id;
-        const char* name;
-        const osmium::NodeRefList& nodes;
-    };
-
     struct building_info
     {
-        way_info way;
+        object_type obj_type;
         bool is_part;
-        double ht_btm, ht_top; // in meters
+        union
+        {
+            const osmium::Way* way;
+            const osmium::Area* area;
+        };
     };
 
     struct highway_info
     {
-        way_info way;
+        const osmium::Way* way;
         way_type type;
         int lanes; // number of lanes (-1 if not present)
         double width; // in meters, estimate if not present
@@ -46,25 +46,31 @@ public:
     std::vector<draw_datad> get_draw_data();
 
 public:
+    struct area
+    {
+        std::vector<std::span<const glm::dvec2>> rings;
+    };
+
     struct building_part
     {
         osmium::object_id_type id;
-        orient_t orient;
+        std::vector<glm::dvec2> verts;
         bbox2d bbox;
         double ht_btm, ht_top;
-        std::vector<glm::dvec2> verts;
+        // False if default height used.
+        bool has_ht_btm, has_ht_top;
     };
 
     struct building
     {
-        building_part info;
+        building_part base;
         std::string name;
         std::vector<building_part*> parts;
 
         struct aabb_traits
         {
             static const bbox2d& bbox(building* building) {
-                return building->info.bbox;
+                return building->base.bbox;
             }
         };
     };
@@ -93,6 +99,7 @@ private:
 
     std::vector<building> m_buildings;
     std::vector<building_part> m_building_parts;
+    types::unord_flat_map<osmium::object_id_type, area> m_bldg_areas;
     std::vector<highway> m_highways;
     std::size_t m_num_highway_nodes = 0;
 };

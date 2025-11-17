@@ -75,17 +75,6 @@ struct deferred_false : std::false_type {};
     bool ok() const noexcept { return handlename != handlenull; }
 
 
-// this only works if NDEBUG is defined in Release mode
-// (default for CMake)
-constexpr bool is_debug()
-{
-#ifdef NDEBUG
-    return false;
-#else
-    return true;
-#endif
-}
-
 using file_ptr = std::unique_ptr<std::FILE, int(*)(std::FILE*)>;
 
 #define SAFE_FOPENA(fname, mode) file_ptr(std::fopen(fname, mode), std::fclose)
@@ -96,16 +85,35 @@ using file_ptr = std::unique_ptr<std::FILE, int(*)(std::FILE*)>;
 #define SAFE_FOPEN(fname, mode) SAFE_FOPENA(fname, mode)
 #endif
 
+
+enum log_type
+{
+    LOG_ERROR,
+    LOG_WARNING,
+    LOG_MESSAGE
+};
+
 bool log_init(const char* logfile);
 void logERROR(const char* fmt, ...);
 void logWARNING(const char* fmt, ...);
 void logMESSAGE(const char* fmt, ...);
 
 #ifdef NDEBUG
+#define logDEBUG(type, fmt, ...) ((void)0)
 #define assert_msg(cond, fmt, ...) ((void)0)
 #else
-void do_assert_msg(const char* expr, const char* file, int line, const char* fmt, ...);
+#define logDEBUG(type, fmt, ...)          \
+    do {                                  \
+        if (type == LOG_ERROR) {          \
+            logERROR(fmt, __VA_ARGS__);   \
+        } else if (type == LOG_WARNING) { \
+            logWARNING(fmt, __VA_ARGS__); \
+        } else if (type == LOG_MESSAGE) { \
+            logMESSAGE(fmt, __VA_ARGS__); \
+        }                                 \
+    } while (0)
 
+void do_assert_msg(const char* expr, const char* file, int line, const char* fmt, ...);
 #define assert_msg(cond, fmt, ...)                                            \
     do {                                                                      \
         if (!(cond)) {                                                        \
@@ -113,6 +121,7 @@ void do_assert_msg(const char* expr, const char* file, int line, const char* fmt
         }                                                                     \
     } while (0)
 #endif
+
 
 struct buffer_overwrite_t {
     explicit buffer_overwrite_t() = default;
@@ -216,6 +225,13 @@ bool parse_num(std::string_view str, T& val)
 
     auto res = std::from_chars(beg, end, val);
     return res.ec == std::errc();
+}
+
+// Parse number with null check.
+template <typename T>
+static bool parse_num_if_exists(const char* str, T& val)
+{
+    return str && parse_num(str, val);
 }
 
 // sorta replacement for C++26 operator+(string, string_view) 

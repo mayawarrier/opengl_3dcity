@@ -19,6 +19,13 @@
 
 #include "../utils.hpp"
 
+
+enum object_type
+{
+    OBJ_TYPE_WAY,
+    OBJ_TYPE_AREA
+};
+
 enum way_type
 {
     WAY_TYPE_UNKNOWN,
@@ -51,16 +58,29 @@ namespace types
     // Use std library in debug mode because it works with Natvis.
     // Boost has Natvis support but it's not being picked up.
 #ifdef NDEBUG
-    template <typename ...Args> using unord_flat_map = boost::unordered::unordered_flat_map<Args...>;
-    template <typename ...Args> using flat_set = boost::container::flat_set<Args...>;
+    template <class ...Args> 
+    using unord_flat_map = boost::unordered::unordered_flat_map<Args...>;
+    
+    template <class T, class Compare = std::less<T>, class ...Args>
+    using flat_set = boost::container::flat_set<T, Compare, Args...>;
 
-    template <typename T, size_t N, typename ...Args> 
+    template <class T, size_t N, class Compare = std::less<T>> // note: C2210
+    using small_flat_set = boost::container::small_flat_set<T, N, Compare>;
+
+    template <class T, size_t N, typename ...Args> 
     using small_vector = boost::container::small_vector<T, N, Args...>;
-#else
-    template <typename ...Args> using unord_flat_map = std::unordered_map<Args...>; 
-    template <typename ...Args> using flat_set = std::set<Args...>;
 
-    template <typename T, size_t N, typename ...Args> 
+#else
+    template <class ...Args> 
+    using unord_flat_map = std::unordered_map<Args...>; 
+
+    template <class T, class Compare = std::less<T>, class ...Args>
+    using flat_set = std::set<T, Compare>;
+
+    template <class T, size_t N, class Compare = std::less<T>> 
+    using small_flat_set = std::set<T, Compare>;
+
+    template <class T, size_t N, class ...Args> 
     using small_vector = std::vector<T>;
 #endif
 }

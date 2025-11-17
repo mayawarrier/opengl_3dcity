@@ -7,13 +7,12 @@
     "sdl2",
     "glm",
     "earcut-hpp",
-    "boost-geometry",
+    "clipper2",
     {
         "name": "boost-container",
         "version>=": "1.88.0"
     },
     "boost-unordered",
-    "cgal",
     "scottt-debugbreak"
   ]
 }

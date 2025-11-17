@@ -14,7 +14,6 @@
 #include "osm.hpp"
 
 
-
 // strcmp with null check
 static bool str_equal(const char* str1, const char* str2)
 {
@@ -24,43 +23,100 @@ static bool str_equal(const char* str1, const char* str2)
     return std::strcmp(str1, str2) == 0;
 }
 
-template <typename T>
-static bool parse_num_if_exists(const char* str, T& val)
+// Osmium manager for OSM data.
+// 
+// This duplicates some functionality from MultiPolygonManager 
+// since CRTP makes it impossible to override way_not_in_any_relation etc.
+//
+class osm_data_manager : public osmium::relations::RelationsManager<osm_data_manager, true, true, true>
 {
-    return str && parse_num(str, val);
-}
+private:
+    using Assembler = osmium::area::Assembler;
 
-class osm_datahandler : public osmium::handler::Handler
-{
 public:
-    void node(const osmium::Node& node)
+    using AssemblerConfig = typename Assembler::config_type;
+
+    explicit osm_data_manager(AssemblerConfig area_assembler_config) :
+        m_assembler_config(std::move(area_assembler_config))
+    {}
+
+    // Called to evaluate which relations to keep
+    bool new_relation(const osmium::Relation& relation) const
     {
-        //auto loc = osmium::geom::MercatorProjection{}(node.location());
-        //node_coords.push_back(loc.x);
-        //node_coords.push_back(loc.y);
-        //node_coords.push_back(0.0);
+        const char* type = relation.tags().get_value_by_key("type");
+        if (type && (!std::strcmp(type, "multipolygon") || !std::strcmp(type, "boundary")))
+        {
+            auto& members = relation.members();
+            return std::any_of(members.cbegin(), members.cend(), [](const osmium::RelationMember& member) {
+                return member.type() == osmium::item_type::way;
+            });
+        }
+        return false;
     }
 
-    void way(const osmium::Way& way)
+    // Called when all relation props are known
+    void complete_relation(const osmium::Relation& relation)
+    {
+        std::vector<const osmium::Way*> ways;
+        ways.reserve(relation.members().size());
+
+        for (const auto& member : relation.members()) {
+            if (member.ref() != 0) {
+                ways.push_back(this->get_member_way(member.ref()));
+                assert(ways.back() != nullptr);
+            }
+        }
+        try {
+            Assembler assembler{ m_assembler_config };
+            assembler(relation, ways, this->buffer());
+        }
+        catch (const osmium::invalid_location&) {
+            // XXX ignore
+        }
+    }
+
+    //void after_way(const osmium::Way& way)
+    //{
+    //    // you need at least 4 nodes to make up a polygon
+    //    if (way.nodes().size() <= 3) {
+    //        return;
+    //    }
+    //
+    //    try {
+    //        if (!way.nodes().front().location() || !way.nodes().back().location()) {
+    //            throw osmium::invalid_location{ "invalid location" };
+    //        }
+    //        if (way.ends_have_same_location())
+    //        {
+    //            if (way.tags().has_tag("area", "no")) {
+    //                return;
+    //            }
+    //            Assembler assembler{ m_assembler_config };
+    //            assembler(way, this->buffer());
+    //            this->possibly_flush();
+    //        }
+    //    }
+    //    catch (const osmium::invalid_location&) {
+    //        // XXX ignore
+    //    }
+    //}
+
+    void way_not_in_any_relation(const osmium::Way& way)
     {
         auto& tags = way.tags();
 
-        mesh_builder::way_info wi{
-            .id = way.id(),
-            .name = tags["name"],
-            .nodes = way.nodes()
-        };
-
+        bool is_bldg_part;
         const char* highway = tags["highway"];
-        if (highway && !str_equal(highway, "footway")) 
-        {    
+        
+        if (highway && !str_equal(highway, "footway"))
+        {
             int lanes;
             double width;
             bool has_width = parse_num_if_exists(tags["width"], width);
             bool has_lanes = parse_num_if_exists(tags["lanes"], lanes);
 
             m_mesh_builder.add_highway({
-                .way = std::move(wi),
+                .way = &way,
                 .type = WAY_TYPE_STREET,
                 .lanes = has_lanes ? lanes : -1,
                 .width = has_width ? width : has_lanes ? lanes * 3.5 : 3.5
@@ -72,64 +128,41 @@ public:
             bool has_width = parse_num_if_exists(tags["width"], width);
 
             m_mesh_builder.add_highway({
-                .way = std::move(wi),
+                .way = &way,
                 .type = WAY_TYPE_FOOTWAY,
                 .lanes = -1,
                 .width = has_width ? width : 1.0
             });
         }
-        else
+        else if (is_building_or_part(tags, is_bldg_part))
         {
-            bool is_building = tags.has_key("building");
-            bool is_building_part = str_equal(tags["building:part"], "yes");
-
-            if (is_building || is_building_part) 
-            {
-                int levels, min_level;
-                double height, min_height;
-
-                bool has_levels    = parse_num_if_exists(tags["building:levels"], levels);
-                bool has_minlevel  = parse_num_if_exists(tags["building:min_level"], min_level);
-                bool has_height    = parse_num_if_exists(tags["height"], height);
-                bool has_minheight = parse_num_if_exists(tags["min_height"], min_height);
-
-                double ht_top = has_height ? height : (has_levels ? (3.0 * levels) : 3.0);
-                double ht_btm = has_minheight ? min_height : (has_minlevel ? (3.0 * min_level) : 0.0);
-
-                m_mesh_builder.add_building({
-                    .way = std::move(wi),
-                    .is_part = is_building_part,
-                    .ht_btm = ht_btm,
-                    .ht_top = ht_top
-                });
-            }
+            m_mesh_builder.add_building({
+                .obj_type = OBJ_TYPE_WAY,
+                .is_part = is_bldg_part,
+                .way = &way
+            });
         }
     }
 
-    // The callback functions can be either static or not depending on whether
-    // you need to access any member variables of the handler.
     void area(const osmium::Area& area)
     {
-        const char* name = area.tags()["name"];
-        //logMESSAGE("Received area %s", name);
-
-        //const char* amenity = area.tags()["amenity"];
-        //if (amenity) {
-        //    // Use the center of the first outer ring. Because we set
-        //    // create_empty_areas = false in the assembler config, we can
-        //    // be sure there will always be at least one outer ring.
-        //    const auto center = calc_center(*area.cbegin<osmium::OuterRing>());
-        //
-        //    print_amenity(amenity, area.tags()["name"], center);
-        //}
+        bool is_bldg_part;
+        if (is_building_or_part(area.tags(), is_bldg_part)) 
+        {
+            m_mesh_builder.add_building({
+                .obj_type = OBJ_TYPE_AREA,
+                .is_part = is_bldg_part,
+                .area = &area
+            });
+        }
     }
 
-    osm_data to_draw_data()
+    osm_data build_meshes()
     {
         auto batch = m_mesh_builder.get_draw_data();
 
         osm_data ret;
-        for (size_t i = 0; i < batch.size(); ++i) 
+        for (size_t i = 0; i < batch.size(); ++i)
         {
             auto& dd = batch[i];
 
@@ -152,16 +185,17 @@ public:
     }
 
 private:
-    mesh_builder m_mesh_builder;
+    bool is_building_or_part(const osmium::TagList& tags, bool& out_is_part) const
+    {
+        bool is_building = tags.has_key("building");
+        bool is_building_part = str_equal(tags["building:part"], "yes");
+        out_is_part = is_building_part;
+        return is_building || is_building_part;
+    }
 
 private:
-    //std::vector<double> node_coords;
-
-    //std::vector<double> m_verts;
-    //std::vector<uint32_t> m_line_indices;
-    //std::vector<uint32_t> m_tri_indices;
-
-    //std::vector<building> m_buildings;
+    AssemblerConfig m_assembler_config;
+    mesh_builder m_mesh_builder; 
 };
 
 bool read_osmfile(const fs::path& path, osm_data& out_data)
@@ -169,33 +203,32 @@ bool read_osmfile(const fs::path& path, osm_data& out_data)
     using index_t = osmium::index::map::FlexMem<osmium::unsigned_object_id_type, osmium::Location>;
     using location_handler_t = osmium::handler::NodeLocationsForWays<index_t>;
 
+    osmium::area::AssemblerConfig area_assembler_cfg;
+    area_assembler_cfg.create_empty_areas = false;
+
+    osm_data_manager data_manager{ area_assembler_cfg };
+
     try {
         const osmium::io::File input_file{ path.string() };
 
-        osmium::area::Assembler::config_type assembler_config;
-        assembler_config.create_empty_areas = false;
-
-        osmium::area::MultipolygonManager<osmium::area::Assembler> mp_manager{ assembler_config };
-        osmium::relations::read_relations(input_file, mp_manager);
+        osmium::relations::read_relations(input_file, data_manager);
 
         index_t index;
         location_handler_t location_handler(index);
-        osm_datahandler data_handler;
-        
+
         osmium::io::Reader reader{ input_file, osmium::io::read_meta::no };
-        osmium::apply(reader, location_handler, data_handler,
-            mp_manager.handler([&data_handler](const osmium::memory::Buffer& area_buffer) {
-                osmium::apply(area_buffer, data_handler);
+        osmium::apply(reader, location_handler,
+            data_manager.handler([&](const osmium::memory::Buffer& area_buffer) {
+                osmium::apply(area_buffer, data_manager);
             })
         );
         reader.close();
-
-        out_data = data_handler.to_draw_data();
     }
     catch (const std::exception& e) {
-        std::fprintf(stderr, "%s\n", e.what());
+        logERROR("Error reading OSM file: %s", e.what());
         return false;
     }
 
+    out_data = data_manager.build_meshes();
     return true;
 }

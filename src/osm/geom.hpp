@@ -140,11 +140,16 @@ inline orient_t orient(const glm::dvec2& a, const glm::dvec2& b, const glm::dvec
     return orient_type(v.x * w.y - v.y * w.x);
 }
 
-// Get orientation of polygon.
-orient_t polygon_orient(std::span<const glm::dvec2> polygon);
+// Get orientation of a path.
+// https://en.wikipedia.org/wiki/Shoelace_formula
+orient_t path_orient(std::span<const glm::dvec2> verts);
 
-// Check if a polygon is within or on the border of another polygon.
-bool polygon_covered_by(std::span<const glm::dvec2> inner_polygon, std::span<const glm::dvec2> outer_polygon);
+// First span is the outer ring, subsequent spans are inner rings (if any).
+using polygon_cspan = std::span<std::span<const glm::dvec2>>;
+using polygon_span = std::span<std::span<glm::dvec2>>;
+
+// Check if a polygon is inside another polygon.
+bool polygon_covered_by(polygon_cspan inner_poly, polygon_cspan outer_poly);
 
 // Triangulate polygon.
 // \param orient - orientation of input vertices. Must be CCW or CW.

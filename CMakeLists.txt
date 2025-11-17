@@ -64,17 +64,20 @@ endif()
 find_path(EARCUT_HPP_INCLUDE_DIRS "mapbox/earcut.hpp")
 target_include_directories(3dcity PRIVATE ${EARCUT_HPP_INCLUDE_DIRS})
 
-find_package(Boost REQUIRED COMPONENTS geometry)
-target_link_libraries(3dcity PRIVATE Boost::geometry)
-
 find_package(boost_unordered CONFIG REQUIRED)
 target_link_libraries(3dcity PRIVATE Boost::unordered)
 
 find_package(Boost REQUIRED COMPONENTS container)
 target_link_libraries(3dcity PRIVATE Boost::container)
 
-find_package(CGAL CONFIG REQUIRED)
-target_link_libraries(3dcity PRIVATE CGAL::CGAL)
+find_package(Clipper2 CONFIG REQUIRED)
+target_link_libraries(3dcity PRIVATE Clipper2::Clipper2)
+
+#find_package(Boost REQUIRED COMPONENTS geometry)
+#target_link_libraries(3dcity PRIVATE Boost::geometry)
+
+#find_package(CGAL CONFIG REQUIRED)
+#target_link_libraries(3dcity PRIVATE CGAL::CGAL)
 
 #find_package(CGAL COMPONENTS CGAL::Qt6)
 #target_compile_definitions(3dcity CGAL_USE_BASIC_VIEWER=1)

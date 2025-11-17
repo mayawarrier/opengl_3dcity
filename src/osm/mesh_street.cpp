@@ -5,6 +5,7 @@
 #include <iterator>
 
 #include <osmium/osm/node_ref_list.hpp>
+#include <osmium/osm/way.hpp>
 #include <osmium/geom/coordinates.hpp>
 #include <osmium/geom/mercator_projection.hpp>
 
@@ -19,19 +20,21 @@
 
 bool mesh_builder::add_highway(const highway_info& info)
 {
-    std::vector<osm_node> nodes(info.way.nodes.size());
+    auto& in_nodes = info.way->nodes();
+    std::vector<osm_node> nodes(in_nodes.size());
 
-    for (size_t i = 0; i < info.way.nodes.size(); ++i)
+    for (size_t i = 0; i < in_nodes.size(); ++i)
     {
-        auto& nr = info.way.nodes[i];
+        auto& nr = in_nodes[i];
         auto proj = osmium::geom::MercatorProjection{}(nr.location());
         nodes[i] = { nr.ref(), glm::dvec2(proj.x, proj.y) };
     }
     m_num_highway_nodes += nodes.size();
 
+    const char* name = info.way->tags()["name"];
     m_highways.push_back({
-        .id = info.way.id,
-        .name = info.way.name ? info.way.name : "",
+        .id = info.way->id(),
+        .name = name ? name : "",
         .type = info.type,
         .nodes = std::move(nodes),
         .width = info.width,
@@ -363,7 +366,7 @@ private:
 
         std::vector<outline_piece> pieces;
         types::unord_flat_map<const tree_path_seg*, types::small_vector<int, 2>> fseg_piece_ids;
-        types::unord_flat_map<const way_net::path*, types::flat_set<int>> street_piece_ids;
+        types::unord_flat_map<const way_net::path*, types::small_flat_set<int, 2>> street_piece_ids;
 
         struct sample_data
         {
@@ -559,7 +562,7 @@ private:
                 join_outline_from_pieces(stpcs_itr, init_piece, outline, start_dir, end_dir);
                 num_outlines++;
 
-                assert(start_dir != DIR_UNDEF && end_dir != DIR_UNDEF);
+                //assert(start_dir != DIR_UNDEF && end_dir != DIR_UNDEF);
 
                 // this means that the footpath crossed the street, 
                 // which should be impossible for real streets/sidewalks
@@ -796,7 +799,7 @@ static bool gen_outline_drawdata(draw_datad& dd, const std::vector<st_outline_bu
         outline_verts.push_back(outline[i].vert);
     }
 
-    orient_t outline_orient = polygon_orient(outline_verts);
+    orient_t outline_orient = path_orient(outline_verts);
     if (outline_orient == ORIENT_COLL) {
         logMESSAGE("Skipping outline since it has 0 area");
         //assert(false); // todo: figure out why this is failing
@@ -809,21 +812,6 @@ static bool gen_outline_drawdata(draw_datad& dd, const std::vector<st_outline_bu
         return false;
     }
 
-    // 763664859      - 7
-    // 11070333726    - 6
-    // 394499209      - 2
-
-    //if (std::find_if(outline_itr->first->nodes.begin(), outline_itr->first->nodes.end(),
-    //    [](auto& n) { return n.id == 931377041; }) != outline_itr->first->nodes.end() &&
-    //    std::find_if(outline_itr->first->nodes.begin(), outline_itr->first->nodes.end(),
-    //        [](auto& n) { return n.id == 11070333727; }) != outline_itr->first->nodes.end())
-    //{
-    //    debug_dd.add_vertex({ joined_outline[8].second, 0.0 });
-    //    debug_dd.add_vertex({ joined_outline[3].second, 0.0 });
-    //    debug_dd.add_vertex({ joined_outline[0].second, 0.0 });
-    //    debug_dd.add_triangle(0, 1, 2);
-    //}
-    //else {
     uint32_t vert_startidx = uint32_t(dd.num_verts());
     for (const auto& point : outline_verts) {
         dd.add_vertex(point.x, point.y, 0.0);
@@ -831,8 +819,8 @@ static bool gen_outline_drawdata(draw_datad& dd, const std::vector<st_outline_bu
     for (size_t i = 0; i < tri_indices.size(); i += 3) {
         dd.add_triangle_w_offset(tri_indices[i], tri_indices[i + 1], tri_indices[i + 2], vert_startidx);
     }
-    //}
-    //return true;
+
+    return true;
 }
 
 bool mesh_builder::gen_street_drawdata(std::vector<draw_datad>& drawdata, const aabb_tree2d<building*>* bldg_tree_ptr)
