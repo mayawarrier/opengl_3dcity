@@ -27,7 +27,7 @@ static const osmium::object_id_type bldg_id(const mesh_builder::building_info& i
     switch (info.obj_type) {
         case OBJ_TYPE_WAY:  return info.way->id();
         case OBJ_TYPE_AREA: return info.area->orig_id();
-        default: assert(false); return 0;
+        default: assert(false); return -1;
     }
 }
 
@@ -74,16 +74,21 @@ bool mesh_builder::get_building_part(const building_info& info, building_part& o
             if (nodes.empty() || !nodes.is_closed()) {
                 return false;
             }
+
             bbox2d bbox;
             std::vector<glm::dvec2> verts(nodes.size() - 1);
             for (size_t i = 0; i < nodes.size() - 1; ++i) {
                 verts[i] = project_and_extend_bbox(nodes[i].location(), bbox);
             }
+            if (path_orient(verts) == ORIENT_CW) {
+                std::reverse(verts.begin(), verts.end());
+            }
 
             out_part = {
                 .id = info.way->id(),
                 .verts = std::move(verts),
-                .bbox = bbox
+                .bbox = bbox,
+                .obj_type = OBJ_TYPE_WAY
             };
             set_building_heights(bldg_object(info)->tags(), out_part);
         }
@@ -102,15 +107,23 @@ bool mesh_builder::get_building_part(const building_info& info, building_part& o
 
             for (auto& outer_ring : area.outer_rings())
             {
-                for (auto& vert : outer_ring) {
+                if (!outer_ring.is_closed() || outer_ring.size() < 3) {
+                    return false;
+                }
+                for (size_t i = 0; i < outer_ring.size() - 1; ++i) {
+                    auto& vert = outer_ring[i];
                     verts.push_back(project_and_extend_bbox(vert.location(), bbox));
                 }
-                ring_sizes.push_back({ 0, int(outer_ring.size()) });
+                ring_sizes.push_back({ 0, int(outer_ring.size()) - 1 });
             
                 for (auto& inner_ring : area.inner_rings(outer_ring))
                 {
+                    if (!inner_ring.is_closed() || inner_ring.size() < 3) {
+                        return false;
+                    }
                     int startidx = int(verts.size());
-                    for (auto& vert : inner_ring) {
+                    for (size_t i = 0; i < inner_ring.size(); ++i) {
+                        auto& vert = inner_ring[i];
                         verts.push_back(project_and_extend_bbox(vert.location(), bbox));
                     }
                     ring_sizes.push_back({ startidx, int(inner_ring.size()) });
@@ -120,15 +133,28 @@ bool mesh_builder::get_building_part(const building_info& info, building_part& o
             decltype(area::rings) rings(ring_sizes.size());
             for (size_t i = 0; i < ring_sizes.size(); ++i) 
             {
-                auto [startidx, size] = ring_sizes[i];
-                rings[i] = std::span(&verts[startidx], size);
+                auto [startidx, size] = ring_sizes[i];        
+                auto ring = std::span(&verts[startidx], size);
+
+                // outer ring must be CCW, inner rings CW
+                if (i == 0) {
+                    if (path_orient(ring) == ORIENT_CW) {
+                        std::reverse(ring.begin(), ring.end());
+                    }
+                }
+                else if (path_orient(ring) == ORIENT_CCW) {
+                    std::reverse(ring.begin(), ring.end());
+                }
+                rings[i] = ring;
             }
-            m_bldg_areas[area.id()] = { .rings = std::move(rings) };
+
+            m_bldg_areas[area.orig_id()] = { .rings = std::move(rings) };
             
             out_part = {
                 .id = area.orig_id(),
                 .verts = std::move(verts),
-                .bbox = bbox
+                .bbox = bbox,
+                .obj_type = OBJ_TYPE_AREA
             };
             set_building_heights(bldg_object(info)->tags(), out_part);
         }
@@ -171,11 +197,8 @@ static inline void mesh_add_triangle(auto& mesh, glm::u32vec3 indices, bool reve
     }
 }
 
-static uint32_t mesh_add_polygon(auto& mesh,
-    std::span<const glm::dvec2> verts,
-    std::span<const uint32_t> indices,
-    double height,
-    bool reverse_winding = false)
+static uint32_t mesh_add_polygon(auto& mesh, std::span<const glm::dvec2> verts,
+    std::span<const uint32_t> indices, double height, bool reverse_winding = false)
 {
     uint32_t vert_startidx = uint32_t(mesh.num_verts());
 
@@ -194,32 +217,58 @@ static uint32_t mesh_add_polygon(auto& mesh,
     return vert_startidx;
 }
 
-static bool gen_building_part_mesh(auto& mesh, const mesh_builder::building_part& part)
+// \param verts_ccw True if the vertices are in CCW order.
+static void mesh_add_sides(auto& mesh, uint32_t bot_verts_idx, 
+    uint32_t top_verts_idx, uint32_t num_verts, bool verts_ccw = true)
 {
-    orient_t part_orient = path_orient(part.verts);
-    if (part_orient == ORIENT_COLL) {
-        logWARNING("Ignoring part %lld since it has 0 area", part.id);
-        return false;
-    }
-
-    auto tri_indices = polygon_triangulate(part.verts, part_orient);
-
-    uint32_t bot_verts_idx = mesh_add_polygon(mesh, part.verts, tri_indices, part.ht_btm, true);
-    uint32_t top_verts_idx = mesh_add_polygon(mesh, part.verts, tri_indices, part.ht_top);
-
-    // sides
-    for (uint32_t icur = 0; icur < part.verts.size(); ++icur)
+    for (uint32_t icur = 0; icur < num_verts; ++icur)
     {
-        uint32_t inext = (icur + 1) % part.verts.size();
-
+        uint32_t inext = (icur + 1) % num_verts;
         uint32_t quad[4] = {
             bot_verts_idx + icur,
             bot_verts_idx + inext,
             top_verts_idx + icur,
             top_verts_idx + inext,
         };
-        mesh_add_triangle(mesh, { quad[0], quad[2], quad[3] }, part_orient == ORIENT_CCW);
-        mesh_add_triangle(mesh, { quad[0], quad[3], quad[1] }, part_orient == ORIENT_CCW);
+        mesh_add_triangle(mesh, { quad[0], quad[2], quad[3] }, verts_ccw);
+        mesh_add_triangle(mesh, { quad[0], quad[3], quad[1] }, verts_ccw);
+    }
+}
+
+bool mesh_builder::get_building_part_mesh(auto& mesh, const building_part& part)
+{
+    std::vector<uint32_t> tri_indices;
+    if (part.obj_type == OBJ_TYPE_AREA) [[ unlikely ]] {
+        tri_indices = polygon_triangulate(m_bldg_areas[part.id].rings);
+    } else {
+        auto vert_span = std::span<const glm::dvec2>(part.verts);
+        tri_indices = polygon_triangulate(std::span(&vert_span, 1));
+    }
+
+    uint32_t bot_verts_idx = mesh_add_polygon(mesh, part.verts, tri_indices, part.ht_btm);
+    uint32_t top_verts_idx = mesh_add_polygon(mesh, part.verts, tri_indices, part.ht_top, true);
+
+    if (part.obj_type == OBJ_TYPE_AREA) [[ unlikely ]] 
+    {
+        auto& rings = m_bldg_areas[part.id].rings;
+
+        auto& outer_ring = rings[0];
+        mesh_add_sides(mesh, bot_verts_idx, top_verts_idx, uint32_t(outer_ring.size()));
+
+        uint32_t vert_offset = uint32_t(outer_ring.size());
+        for (size_t iring = 1; iring < rings.size(); ++iring) 
+        {
+            auto& inner_ring = rings[iring];
+            uint32_t inner_ring_size = uint32_t(inner_ring.size());
+            uint32_t inner_bot_idx = bot_verts_idx + vert_offset;
+            uint32_t inner_top_idx = top_verts_idx + vert_offset;
+
+            mesh_add_sides(mesh, inner_bot_idx, inner_top_idx, inner_ring_size, false);
+            vert_offset += inner_ring_size;
+        }
+    }
+    else {
+        mesh_add_sides(mesh, bot_verts_idx, top_verts_idx, uint32_t(part.verts.size()));
     }
     return true;
 }
@@ -248,7 +297,7 @@ bool mesh_builder::gen_building_drawdata(std::vector<draw_datad>& drawdata, aabb
         polygon_cspan part_poly;
         std::span<const glm::dvec2> part_verts;
 
-        if (m_bldg_areas.contains(part.id)) [[ unlikely ]] {
+        if (part.obj_type == OBJ_TYPE_AREA) [[ unlikely ]] {
             part_poly = m_bldg_areas[part.id].rings;
         } else {
             part_verts = part.verts;
@@ -261,7 +310,7 @@ bool mesh_builder::gen_building_drawdata(std::vector<draw_datad>& drawdata, aabb
             polygon_cspan bldg_poly;
             std::span<const glm::dvec2> bldg_verts;
 
-            if (m_bldg_areas.contains(inter_bldgs[icand]->base.id)) [[ unlikely ]] {
+            if (inter_bldgs[icand]->base.obj_type == OBJ_TYPE_AREA) [[ unlikely ]] {
                 bldg_poly = m_bldg_areas[inter_bldgs[icand]->base.id].rings;
             } else {
                 bldg_verts = inter_bldgs[icand]->base.verts;
@@ -304,7 +353,7 @@ bool mesh_builder::gen_building_drawdata(std::vector<draw_datad>& drawdata, aabb
         if (building.parts.empty() || building.base.has_ht_top)
         {
             draw_datad dd;
-            if (gen_building_part_mesh(dd, building.base)) {
+            if (get_building_part_mesh(dd, building.base)) {
                 dd.color = building_color;
                 dd.name = building.name.empty() ? "bldg " + std::to_string(building.base.id) : building.name;
                 drawdata.push_back(std::move(dd));
@@ -315,7 +364,7 @@ bool mesh_builder::gen_building_drawdata(std::vector<draw_datad>& drawdata, aabb
             logDEBUG(LOG_MESSAGE, "   Adding part %lld", part->id);
 
             draw_datad dd;
-            if (gen_building_part_mesh(dd, *part)) {
+            if (get_building_part_mesh(dd, *part)) {
                 dd.color = building_color;
                 dd.name = "part " + std::to_string(part->id);
                 drawdata.push_back(std::move(dd));
@@ -328,7 +377,7 @@ bool mesh_builder::gen_building_drawdata(std::vector<draw_datad>& drawdata, aabb
         draw_datad dd;
         dd.color = building_color;
         dd.name = "part " + std::to_string(part->id);
-        gen_building_part_mesh(dd, *part);
+        get_building_part_mesh(dd, *part);
 
         drawdata.push_back(std::move(dd));
     }

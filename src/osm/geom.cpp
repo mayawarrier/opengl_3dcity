@@ -143,17 +143,6 @@ static Clipper2Lib::PathsD get_clipper_poly(polygon_cspan in_poly, bbox2d& bbox)
         }
         clpoly.push_back(std::move(path));
     }
-    
-    // outer ring must be CCW
-    if (!IsPositive(clpoly[0])) {
-        std::reverse(clpoly[0].begin(), clpoly[0].end());
-    }
-    // inner rings must be CW
-    for (size_t iring = 1; iring < clpoly.size(); ++iring) {
-        if (IsPositive(clpoly[iring])) {
-            std::reverse(clpoly[iring].begin(), clpoly[iring].end());
-        }
-    }
     return clpoly;
 }
 
@@ -229,23 +218,25 @@ private:
     const T& m_data;
 };
 
-std::vector<uint32_t> polygon_triangulate(std::span<const glm::dvec2> verts, orient_t orient)
+std::vector<uint32_t> polygon_triangulate(polygon_cspan polygon)
 {
-    if (orient == ORIENT_CW) {
-        std::array<std::span<const glm::dvec2>, 1> polygon = { { verts } };
-        return mapbox::earcut<uint32_t>(polygon);
-    } 
-    else {
-        assert(orient == ORIENT_CCW);
-        // earcut claims to handle CCW polygons properly, but it does not. Make it CW.
-        std::array<reversed_view<std::span<const glm::dvec2>>, 1> polygon = { { verts } };
+    return mapbox::earcut<uint32_t>(polygon);
 
-        auto ret = mapbox::earcut<uint32_t>(polygon);
-        for (auto& idx : ret) {
-            idx = uint32_t(verts.size()) - idx - 1;
-        }
-        return ret;        
-    }
+    //if (orient == ORIENT_CW) {
+    //    std::array<std::span<const glm::dvec2>, 1> polygon = { { verts } };
+    //    return mapbox::earcut<uint32_t>(polygon);
+    //} 
+    //else {
+    //    assert(orient == ORIENT_CCW);
+    //    // earcut claims to handle CCW polygons properly, but it does not. Make it CW.
+    //    std::array<reversed_view<std::span<const glm::dvec2>>, 1> polygon = { { verts } };
+
+    //    auto ret = mapbox::earcut<uint32_t>(polygon);
+    //    for (auto& idx : ret) {
+    //        idx = uint32_t(verts.size()) - idx - 1;
+    //    }
+    //    return ret;        
+    //}
 }
 
 static void segment_triangulate(glm::dvec2 p0, glm::dvec2 p1, double width, draw_datad& dd)

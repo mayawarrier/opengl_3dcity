@@ -562,11 +562,9 @@ private:
                 join_outline_from_pieces(stpcs_itr, init_piece, outline, start_dir, end_dir);
                 num_outlines++;
 
-                //assert(start_dir != DIR_UNDEF && end_dir != DIR_UNDEF);
-
-                // this means that the footpath crossed the street, 
+                // this means that the footpath crossed the street,
                 // which should be impossible for real streets/sidewalks
-                if (start_dir != end_dir) {
+                if (start_dir == DIR_UNDEF || end_dir == DIR_UNDEF || start_dir != end_dir) {
                     entry.outlines.pop_back();
                     num_bad_outlines++;
                     continue;
@@ -583,7 +581,7 @@ private:
             }
 
             // if all outlines were bad, remove (very unlikely)
-            if (entry.outlines.empty()) {
+            if (entry.outlines.empty()) { 
                 ret.pop_back();
             }
         }
@@ -793,22 +791,18 @@ static void gen_path_drawdata(draw_datad& dd, const way_net::path& path, double 
 
 static bool gen_outline_drawdata(draw_datad& dd, const std::vector<st_outline_builder::outline_node>& outline)
 {
-    std::vector<glm::dvec2> outline_verts;
-
+    std::vector<glm::dvec2> outline_verts(outline.size());
     for (size_t i = 0; i < outline.size(); ++i) {
-        outline_verts.push_back(outline[i].vert);
+        outline_verts[i] = outline[i].vert;
     }
 
-    orient_t outline_orient = path_orient(outline_verts);
-    if (outline_orient == ORIENT_COLL) {
-        logMESSAGE("Skipping outline since it has 0 area");
-        //assert(false); // todo: figure out why this is failing
-        return false;
+    if (path_orient(outline_verts) == ORIENT_CW) {
+        std::reverse(outline_verts.begin(), outline_verts.end());
     }
-
-    auto tri_indices = polygon_triangulate(outline_verts, outline_orient);
+    auto vert_span = std::span<const glm::dvec2>(outline_verts);
+    auto tri_indices = polygon_triangulate(std::span(&vert_span, 1));
     if (tri_indices.empty()) {
-        logMESSAGE("Skipping outline since it has no triangles");
+        logDEBUG(LOG_MESSAGE, "Skipping outline since it has no triangles");
         return false;
     }
 

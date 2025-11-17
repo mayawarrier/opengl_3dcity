@@ -145,6 +145,7 @@ inline orient_t orient(const glm::dvec2& a, const glm::dvec2& b, const glm::dvec
 orient_t path_orient(std::span<const glm::dvec2> verts);
 
 // First span is the outer ring, subsequent spans are inner rings (if any).
+// Outer ring must be CCW, inner rings CW.
 using polygon_cspan = std::span<std::span<const glm::dvec2>>;
 using polygon_span = std::span<std::span<glm::dvec2>>;
 
@@ -152,8 +153,7 @@ using polygon_span = std::span<std::span<glm::dvec2>>;
 bool polygon_covered_by(polygon_cspan inner_poly, polygon_cspan outer_poly);
 
 // Triangulate polygon.
-// \param orient - orientation of input vertices. Must be CCW or CW.
-std::vector<uint32_t> polygon_triangulate(std::span<const glm::dvec2> polygon, orient_t orient);
+std::vector<uint32_t> polygon_triangulate(polygon_cspan polygon);
 
 // Triangulate a thick polyline.
 void polyline_triangulate(std::span<const glm::dvec2> polyline, double width, draw_datad& dd, double eps = 1e-9);
