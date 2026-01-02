@@ -268,6 +268,7 @@ private:
         }
     };
 
+    // todo: return results from both sides of the sample footpath, using only one point query!
     outline_proj get_street_proj(const glm::dvec2& sample, const tree_path_seg* src_tseg, double eps)
     {
         struct tree_qdata
@@ -275,11 +276,10 @@ private:
             double sqdist;
             double pt_param;
         };
-
-        auto dist_range = param_range{ 0.0, 20.0 };
-
         tree_qdata hit_segdata{};
         tree_path_seg* hit_seg = nullptr;
+
+        auto dist_range = param_range{ 0.0, 20.0 };
 
         bool hit = m_seg_tree.query_nearest(sample, dist_range, 
             [&](tree_path_seg* cand_tseg, tree_qdata& out_qdata) -> bool
@@ -365,8 +365,8 @@ private:
         };
 
         std::vector<outline_piece> pieces;
+        types::unord_flat_map<const way_net::path*, types::flat_set<int>> street_piece_ids;
         types::unord_flat_map<const tree_path_seg*, types::small_vector<int, 2>> fseg_piece_ids;
-        types::unord_flat_map<const way_net::path*, types::small_flat_set<int, 2>> street_piece_ids;
 
         struct sample_data
         {
@@ -780,10 +780,9 @@ private:
 
 static void gen_path_drawdata(draw_datad& dd, const way_net::path& path, double eps)
 {
-    std::vector<glm::dvec2> verts;
-    verts.reserve(path.nodes.size());
-    for (const auto& node : path.nodes) {
-        verts.push_back(node.vert);
+    std::vector<glm::dvec2> verts(path.nodes.size());
+    for (size_t i = 0; i < path.nodes.size(); ++i) {
+        verts[i] = path.nodes[i].vert;
     }
     // todo: use each way's width when triangulating the polyline
     polyline_triangulate(verts, path.nodes[1].in_way->width, dd, eps);
@@ -795,16 +794,17 @@ static bool gen_outline_drawdata(draw_datad& dd, const std::vector<st_outline_bu
     for (size_t i = 0; i < outline.size(); ++i) {
         outline_verts[i] = outline[i].vert;
     }
-
     if (path_orient(outline_verts) == ORIENT_CW) {
         std::reverse(outline_verts.begin(), outline_verts.end());
     }
+    
     auto vert_span = std::span<const glm::dvec2>(outline_verts);
     auto tri_indices = polygon_triangulate(std::span(&vert_span, 1));
     if (tri_indices.empty()) {
         logDEBUG(LOG_MESSAGE, "Skipping outline since it has no triangles");
         return false;
     }
+    assert(check_triangles_oriented(outline_verts, tri_indices));
 
     uint32_t vert_startidx = uint32_t(dd.num_verts());
     for (const auto& point : outline_verts) {
@@ -837,65 +837,76 @@ bool mesh_builder::gen_street_drawdata(std::vector<draw_datad>& drawdata, const 
 
     auto tbegin_net = clk::now();
     way_net network;
-    for (const auto& way : m_highways)
     {
-        for (size_t i = 0; i < way.nodes.size(); ++i)
+        for (const auto& way : m_highways)
         {
-            auto* prev_waynode = (i == 0) ? nullptr : &way.nodes[i - 1];
-            auto* cur_waynode = &way.nodes[i];
-            auto* next_waynode = (i == way.nodes.size() - 1) ? nullptr : &way.nodes[i + 1];
+            for (size_t i = 0; i < way.nodes.size(); ++i)
+            {
+                auto* prev_waynode = (i == 0) ? nullptr : &way.nodes[i - 1];
+                auto* cur_waynode = &way.nodes[i];
+                auto* next_waynode = (i == way.nodes.size() - 1) ? nullptr : &way.nodes[i + 1];
 
-            auto nodeitr = network.get_or_add_node(cur_waynode->id, cur_waynode->vert);
+                auto nodeitr = network.get_or_add_node(cur_waynode->id, cur_waynode->vert);
 
-            auto& adj_node_ids = nodeitr->second.adj_node_ids;
-            if (prev_waynode) {
-                adj_node_ids.insert(prev_waynode->id);
-            }
-            if (next_waynode) {
-                adj_node_ids.insert(next_waynode->id);
-                network.add_edge({ nodeitr->first, next_waynode->id }, &way);
+                auto& adj_node_ids = nodeitr->second.adj_node_ids;
+                if (prev_waynode) {
+                    adj_node_ids.insert(prev_waynode->id);
+                }
+                if (next_waynode) {
+                    adj_node_ids.insert(next_waynode->id);
+                    network.add_edge({ nodeitr->first, next_waynode->id }, &way);
+                }
             }
         }
     }
-    auto tend_net = clk::now();
-
-    step_done("Network creation", tend_net - tbegin_net);
+    step_done("Street network", clk::now() - tbegin_net);
     
     auto tbegin_paths_ex = clk::now();
-    auto all_paths = get_all_paths_bw_intersections(network);
-    auto tend_paths_ex = clk::now();
-
-    step_done("Path extraction", tend_paths_ex - tbegin_paths_ex);
+    way_net_paths all_paths;
+    {
+        all_paths = get_all_paths_bw_intersections(network);
+    }
+    step_done("Path extraction", clk::now() - tbegin_paths_ex);
 
     st_outline_builder st_builder(all_paths, *bldg_tree_ptr, step_done);
     auto st_outline_map = st_builder.build_outlines(eps);
+    //auto st_outline_map = st_outline_builder::street_outlines_t{};
 
-    draw_datad footpath_dd { .name = "footpaths", .color = glm::vec4(0.3f, 0.3f, 0.3f, 1.0f) };
-    draw_datad street_dd { .name = "streets", .color = glm::vec4(0.7f, 0.7f, 0.7f, 1.0f) };
-    //draw_datad debug_dd { .name = "debug", .color = glm::vec4(1.0f, 0.f, 0.f, 1.f) };
+    draw_datad footpath_dd { 
+        .name = "footpaths", 
+        .color = glm::vec4(0.5f, 0.5f, 0.5f, 1.0f) 
+    };
+    draw_datad street_dd { 
+        .name = "streets", 
+        .color = glm::vec4(0.25f, 0.25f, 0.25f, 1.0f) 
+    };
+    //draw_datad debug_dd { 
+    //    .name = "debug", 
+    //    .color = glm::vec4(1.0f, 0.f, 0.f, 1.f) 
+    //};
 
     auto tbegin_outlines = clk::now();
-    for (auto& [street, outline] : st_outline_map) {
-        if (!gen_outline_drawdata(street_dd, outline)) {
-            gen_path_drawdata(street_dd, *street, eps);
+    {
+        for (auto& [street, outline] : st_outline_map) {
+            if (!gen_outline_drawdata(street_dd, outline)) {
+                gen_path_drawdata(street_dd, *street, eps);
+            }
         }
     }
-    auto tend_outlines = clk::now();
-
-    step_done("Outline triangulation", tend_outlines - tbegin_outlines);
+    step_done("Outline triangulation", clk::now() - tbegin_outlines);
 
     auto tbegin_paths = clk::now();
-    for (const auto& footpath : all_paths.footpaths) {
-        gen_path_drawdata(footpath_dd, footpath, eps);
-    } 
-    for (const auto& street : all_paths.streets) {
-        if (!st_outline_map.contains(&street)) {
-            gen_path_drawdata(street_dd, street, eps);
+    {
+        for (const auto& footpath : all_paths.footpaths) {
+            gen_path_drawdata(footpath_dd, footpath, eps);
+        }
+        for (const auto& street : all_paths.streets) {
+            if (!st_outline_map.contains(&street)) {
+                gen_path_drawdata(street_dd, street, eps);
+            }
         }
     }
-    auto tend_paths = clk::now();
-
-    step_done("Path triangulation", tend_paths - tbegin_paths);
+    step_done("Path triangulation", clk::now() - tbegin_paths);
 
     uint32_t num_tris = street_dd.num_tris() + footpath_dd.num_tris();
     uint32_t num_verts = street_dd.num_verts() + footpath_dd.num_verts();
@@ -906,8 +917,8 @@ bool mesh_builder::gen_street_drawdata(std::vector<draw_datad>& drawdata, const 
 
     auto tend = clk::now();
 
-    logMESSAGE("Generated %u tris and %u vertices in %s", num_tris, num_verts, time_str(tend - tbegin).c_str());
-    logMESSAGE("-----------------------------------------------\n");
+    logMESSAGE("Generated %u tris and %u vertices in %s", 
+        num_tris, num_verts, time_str(tend - tbegin).c_str());
 
     return true;
 }
