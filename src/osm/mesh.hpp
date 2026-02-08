@@ -36,6 +36,8 @@ public:
         way_type type;
         // number of lanes (-1 if not present)
         int lanes;
+        // z level (0 by default)
+        int layer = 0;
         // in meters, estimate if not present
         double width;
     };
@@ -83,6 +85,7 @@ public:
         osmium::object_id_type id;
         std::string name;
         way_type type;
+        int layer;
         std::vector<osm_node> nodes;
         double width;
 
@@ -96,7 +99,7 @@ public:
 
 private:
     bool get_building_part(const building_info& info, building_part& part);
-    bool get_building_part_mesh(auto& mesh, const building_part& part);
+    bool get_building_part_mesh(draw_datad& mesh, const building_part& part);
 
     bool gen_building_drawdata(std::vector<draw_datad>& drawdata, aabb_tree2d<building*>* out_bldg_tree);
     bool gen_street_drawdata(std::vector<draw_datad>& drawdata, const aabb_tree2d<building*>* bldg_tree);

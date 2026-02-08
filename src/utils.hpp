@@ -42,6 +42,33 @@
 #define IGNORE_WFORMAT_SECURITY
 #endif
 
+// Disable copy and enable move semantics for a class with a single handle member.
+#define HANDLE_CLASS(classname, handlename, handlenull)              \
+    classname(const classname&) = delete;                            \
+    classname& operator=(const classname&) = delete;                 \
+                                                                     \
+    classname(classname&& rhs) noexcept :                            \
+        handlename(std::exchange(rhs.handlename, handlenull))        \
+    {}                                                               \
+    classname& operator=(classname&& rhs) noexcept {                 \
+        if (this != &rhs) {                                          \
+            handlename = std::exchange(rhs.handlename, handlenull);  \
+        }                                                            \
+        return *this;                                                \
+    }                                                                \
+    bool ok() const noexcept { return handlename != handlenull; }
+
+// Disable copy semantics for a class.
+#define DISABLE_COPY(classname)                      \
+    classname(const classname&) = delete;            \
+    classname& operator=(const classname&) = delete;
+
+// Default move semantics for a class.
+#define DEFAULT_MOVE(classname)                      \
+    classname(classname&&) = default;                \
+    classname& operator=(classname&&) = default;
+
+
 namespace fs = std::filesystem;
 namespace tim = std::chrono;
 
@@ -58,21 +85,6 @@ struct size
 template <typename...>
 struct deferred_false : std::false_type {};
 
-// Disable copy and enable move semantics for a class with a single handle member.
-#define HANDLE_CLASS(classname, handlename, handlenull)           \
-    classname(const classname&) = delete;                            \
-    classname& operator=(const classname&) = delete;                 \
-                                                                     \
-    classname(classname&& rhs) noexcept :                            \
-        handlename(std::exchange(rhs.handlename, handlenull))        \
-    {}                                                               \
-    classname& operator=(classname&& rhs) noexcept {                 \
-        if (this != &rhs) {                                          \
-            handlename = std::exchange(rhs.handlename, handlenull);  \
-        }                                                            \
-        return *this;                                                \
-    }                                                                \
-    bool ok() const noexcept { return handlename != handlenull; }
 
 
 using file_ptr = std::unique_ptr<std::FILE, int(*)(std::FILE*)>;

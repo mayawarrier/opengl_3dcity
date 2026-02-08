@@ -1,31 +1,43 @@
 
+#include <cmath>
+
 #include "containers/aabb_tree.hpp"
 #include "mesh.hpp"
 
 static bbox3d center_drawdata_batch(std::span<draw_datad> batch)
 {
-    bbox3d batch_bbox;
+    //bbox3d batch_bbox;
+
+    size_t ivert = 0;
+    glm::dvec3 meanpos(0.0);
+    
     for (draw_datad& dd : batch) {
-        for (size_t i = 0; i < dd.verts.size(); i += 3) {
-            batch_bbox.extend({
-                dd.verts[i + 0],
-                dd.verts[i + 1],
-                dd.verts[i + 2]
-            });
+        for (uint32_t i = 0; i < dd.num_verts(); ++i) {
+            //batch_bbox.extend({
+            //    dd.verts[i + 0],
+            //    dd.verts[i + 1],
+            //    dd.verts[i + 2]
+            //});
+            meanpos += (dd.get_vertex(i) - meanpos) / double(ivert + 1);
+            ivert++;
         }
     }
-    glm::dvec3 batch_center = batch_bbox.center();
+
+    //glm::dvec3 batch_center = batch_bbox.center();
     for (draw_datad& dd : batch) {
         for (size_t i = 0; i < dd.verts.size(); i += 3) {
-            dd.verts[i + 0] -= batch_center.x;
-            dd.verts[i + 1] -= batch_center.y;
-            dd.verts[i + 2] -= batch_center.z;
+            //dd.verts[i + 0] -= batch_center.x;
+            //dd.verts[i + 1] -= batch_center.y;
+            //dd.verts[i + 2] -= batch_center.z;
+            dd.verts[i + 0] -= meanpos.x;
+            dd.verts[i + 1] -= meanpos.y;
+            dd.verts[i + 2] -= meanpos.z;
         }
     }
 
     bbox3d ret;
-    ret.min = batch_bbox.min - batch_center;
-    ret.max = batch_bbox.max - batch_center;
+    //ret.min = batch_bbox.min - batch_center;
+    //ret.max = batch_bbox.max - batch_center;
     return ret;
 }
 
@@ -37,6 +49,8 @@ std::vector<draw_datad> mesh_builder::get_draw_data()
     std::vector<draw_datad> ret;
     gen_building_drawdata(ret, &bldg_tree);
     gen_street_drawdata(ret, &bldg_tree);
+
+    logMESSAGE("-----------------------------------------------\n");
 
     bbox3d bbox = center_drawdata_batch(ret);
 

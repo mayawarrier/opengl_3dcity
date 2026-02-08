@@ -1,4 +1,6 @@
 // Hint files help the Visual Studio IDE interpret Visual C++ identifiers
 // such as names of functions and macros.
 // For more information see https://go.microsoft.com/fwlink/?linkid=865984
+#define DISABLE_COPY(classname) classname(const classname&) = delete; classname& operator=(const classname&) = delete;
+#define DEFAULT_MOVE(classname) classname(classname&&) = default; classname& operator=(classname&&) = default;
 #define HANDLE_CLASS(classname, handlename, handlenull) classname(const classname&) = delete; classname& operator=(const classname&) = delete; classname(classname&& rhs) noexcept : handlename(std::exchange(rhs.handlename, handlenull)) {} classname& operator=(classname&& rhs) noexcept { if (this != &rhs) { handlename = std::exchange(rhs.handlename, handlenull); } return *this; } bool ok() const noexcept { return handlename != handlenull; }

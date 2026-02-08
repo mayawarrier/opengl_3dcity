@@ -45,11 +45,12 @@ int main(int argc, char* argv[])
         return -1;
     }
 
-    window wnd("MAIN_WINDOW", "3D City", { 900, 750 });
+    window wnd("MAIN_WINDOW", "3D City", { 1100, 900 });
     if (!wnd.ok()) {
         return -1;
     }
 
+    //glEnable(GL_MULTISAMPLE);
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_PRIMITIVE_RESTART);
     glPrimitiveRestartIndex(std::numeric_limits<uint32_t>::max());
@@ -157,7 +158,7 @@ int main(int argc, char* argv[])
 
     edit_camera camera;
 
-    glm::mat4 projection = glm::perspective(glm::radians(45.0f), wnd.aspect_ratio(), 0.1f, 10000.0f);
+    glm::mat4 projection = glm::perspective(glm::radians(45.0f), wnd.aspect_ratio(), 0.1f, 50000.0f);
     //glm::mat4 projection = glm::ortho(-1000.f, 1000.f, -1000.f, 1000.f, 0.001f, 1000.f);
 
     uint64_t last_ticks = 0;
@@ -233,7 +234,7 @@ int main(int argc, char* argv[])
                 if (DRAW_WIREFRAME)
                 {
                     glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-                    glUniform4f(color_loc, 0, 0, 0, 1.0f);
+                    glUniform4f(color_loc, 1.0f, 0, 0, 1.0f);
                     glDrawElements(GL_TRIANGLES, colr_range.count * 3, GL_UNSIGNED_INT, (void*)(colr_range.startidx * sizeof(uint32_t) * 3));
                     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
                 }

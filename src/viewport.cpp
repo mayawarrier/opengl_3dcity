@@ -49,6 +49,8 @@ window::window(const char* name, const char* title, ::size<int> size, bool fulls
     constexpr gladGLversionStruct want_glversion = { 3, 3 };
 
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+    SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 1); // Request 1 multisample buffer
+    SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 4); // Request 4 samples per pixel (can be 2, 8, etc.)
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, want_glversion.major);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, want_glversion.minor);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);

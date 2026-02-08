@@ -153,11 +153,15 @@ struct bbox
     vec_t min;
     vec_t max;
 
-    bbox() :
-        min(std::numeric_limits<double>::infinity()),
-        max(-std::numeric_limits<double>::infinity())
-    {}
-
+    // Get a default-initialized bbox.
+    // bbox must be a POD class so it can't have a ctor.
+    static bbox empty() {
+        return {
+            .min = vec_t(std::numeric_limits<double>::infinity()),
+            .max = vec_t(-std::numeric_limits<double>::infinity())
+        };
+    }
+    
     void extend(const bbox& other)
     {
         this->min = glm::min(this->min, other.min);
@@ -173,7 +177,14 @@ struct bbox
     vec_t center() const {
         return (min + max) / 2.0;
     }
+
+    bool intersects(const bbox& rhs) const {
+        return
+            glm::all(glm::lessThanEqual(this->min, rhs.max)) &&
+            glm::all(glm::greaterThanEqual(this->max, rhs.min));
+    }
 };
+
 
 // 2D axis-aligned bounding box
 using bbox2d = bbox<2>; 
@@ -209,6 +220,10 @@ struct draw_data
 
     void add_triangle_w_offset(uint32_t idx0, uint32_t idx1, uint32_t idx2, uint32_t offset) {
         add_triangle(idx0 + offset, idx1 + offset, idx2 + offset);
+    }
+
+    glm::dvec3 get_vertex(uint32_t idx) {
+        return { verts[3 * idx], verts[3 * idx + 1], verts[3 * idx + 2] };
     }
 
     uint32_t num_verts() const { return uint32_t(verts.size() / 3); }

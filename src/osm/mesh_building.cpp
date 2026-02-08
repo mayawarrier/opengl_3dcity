@@ -1,4 +1,3 @@
-
 #include <osmium/osm/node_ref_list.hpp>
 #include <osmium/osm/way.hpp>
 #include <osmium/osm/area.hpp>
@@ -10,7 +9,6 @@
 #include "containers/aabb_tree.hpp"
 #include "geom.hpp"
 #include "mesh.hpp"
-
 
 
 static const osmium::OSMObject* bldg_object(const mesh_builder::building_info& info)
@@ -75,7 +73,7 @@ bool mesh_builder::get_building_part(const building_info& info, building_part& o
                 return false;
             }
 
-            bbox2d bbox;
+            auto bbox = bbox2d::empty();
             std::vector<glm::dvec2> verts(nodes.size() - 1);
             for (size_t i = 0; i < nodes.size() - 1; ++i) {
                 verts[i] = project_and_extend_bbox(nodes[i].location(), bbox);
@@ -101,7 +99,7 @@ bool mesh_builder::get_building_part(const building_info& info, building_part& o
                 return false;
             }
             
-            bbox2d bbox;
+            auto bbox = bbox2d::empty();
             std::vector<glm::dvec2> verts;
             std::vector<std::pair<int, int>> ring_sizes;
 
@@ -122,11 +120,11 @@ bool mesh_builder::get_building_part(const building_info& info, building_part& o
                         return false;
                     }
                     int startidx = int(verts.size());
-                    for (size_t i = 0; i < inner_ring.size(); ++i) {
+                    for (size_t i = 0; i < inner_ring.size() - 1; ++i) {
                         auto& vert = inner_ring[i];
                         verts.push_back(project_and_extend_bbox(vert.location(), bbox));
                     }
-                    ring_sizes.push_back({ startidx, int(inner_ring.size()) });
+                    ring_sizes.push_back({ startidx, int(inner_ring.size()) - 1 });
                 }
             }
 
@@ -188,7 +186,7 @@ bool mesh_builder::add_building(const building_info& info)
     return true;
 }
 
-static inline void mesh_add_triangle(auto& mesh, glm::u32vec3 indices, bool reverse_winding)
+static inline void mesh_add_triangle(draw_datad& mesh, glm::u32vec3 indices, bool reverse_winding)
 {
     if (reverse_winding) {
         mesh.add_triangle(indices[0], indices[2], indices[1]);
@@ -197,11 +195,10 @@ static inline void mesh_add_triangle(auto& mesh, glm::u32vec3 indices, bool reve
     }
 }
 
-static uint32_t mesh_add_polygon(auto& mesh, std::span<const glm::dvec2> verts,
+static uint32_t mesh_add_polygon(draw_datad& mesh, std::span<const glm::dvec2> verts,
     std::span<const uint32_t> indices, double height, bool reverse_winding = false)
 {
     uint32_t vert_startidx = uint32_t(mesh.num_verts());
-
     for (const auto& vert : verts) {
         mesh.add_vertex(vert.x, vert.y, height);
     }
@@ -218,7 +215,7 @@ static uint32_t mesh_add_polygon(auto& mesh, std::span<const glm::dvec2> verts,
 }
 
 // \param verts_ccw True if the vertices are in CCW order.
-static void mesh_add_sides(auto& mesh, uint32_t bot_verts_idx, 
+static void mesh_add_sides(draw_datad& mesh, uint32_t bot_verts_idx, 
     uint32_t top_verts_idx, uint32_t num_verts, bool verts_ccw = true)
 {
     for (uint32_t icur = 0; icur < num_verts; ++icur)
@@ -235,7 +232,7 @@ static void mesh_add_sides(auto& mesh, uint32_t bot_verts_idx,
     }
 }
 
-bool mesh_builder::get_building_part_mesh(auto& mesh, const building_part& part)
+bool mesh_builder::get_building_part_mesh(draw_datad& mesh, const building_part& part)
 {
     std::vector<uint32_t> tri_indices;
     if (part.obj_type == OBJ_TYPE_AREA) [[ unlikely ]] {
@@ -244,6 +241,8 @@ bool mesh_builder::get_building_part_mesh(auto& mesh, const building_part& part)
         auto vert_span = std::span<const glm::dvec2>(part.verts);
         tri_indices = polygon_triangulate(std::span(&vert_span, 1));
     }
+
+    assert(check_triangles_oriented(part.verts, tri_indices));
 
     uint32_t bot_verts_idx = mesh_add_polygon(mesh, part.verts, tri_indices, part.ht_btm);
     uint32_t top_verts_idx = mesh_add_polygon(mesh, part.verts, tri_indices, part.ht_top, true);
@@ -275,6 +274,30 @@ bool mesh_builder::get_building_part_mesh(auto& mesh, const building_part& part)
 
 bool mesh_builder::gen_building_drawdata(std::vector<draw_datad>& drawdata, aabb_tree2d<building*>* bldg_tree_ptr)
 {
+    int CUR_STEP = 1;
+    constexpr int NUM_STEPS = 3;
+
+    auto step_done = [&](const char* msg, clk::duration dur) {
+        logMESSAGE("  [%d/%d] %s: %s", CUR_STEP, NUM_STEPS, msg, time_str(dur).c_str());
+        CUR_STEP++;
+    };
+
+    size_t num_verts = 0, num_tris = 0;
+    auto add_drawdata = [&](draw_datad&& dd) {
+        num_verts += dd.num_verts();
+        num_tris += dd.num_tris();
+        drawdata.push_back(std::move(dd));
+    };
+
+    logMESSAGE("-----------------------------------------------");
+    logMESSAGE("Generating buildings...");
+    logMESSAGE("%zu buildings, %zu parts, %zu areas", 
+        m_buildings.size(), m_building_parts.size(), m_bldg_areas.size());
+
+    auto tbegin = clk::now();
+
+    // Build AABB tree for fast intersection queries
+    auto tbegin_tree = clk::now();
     auto& bldg_tree = *bldg_tree_ptr;
     {
         buffer<building*> tree_objects(m_buildings.size(), buffer_overwrite);
@@ -283,104 +306,118 @@ bool mesh_builder::gen_building_drawdata(std::vector<draw_datad>& drawdata, aabb
         }
         bldg_tree = aabb_tree2d<building*>::create_unsafe(tree_objects.span());
     }
+    step_done("Building AABB tree", clk::now() - tbegin_tree);
 
+    // Map parts/areas to buildings
+    auto tbegin_map = clk::now();
     std::vector<building_part*> unmapped_parts;
-    for (auto& part : m_building_parts)
     {
-        auto inter_bldgs = bldg_tree.query_bbox_all(part.bbox);
-        if (inter_bldgs.empty()) {
-            logDEBUG(LOG_WARNING, "Part %lld tree query returned nothing", part.id);
-            unmapped_parts.push_back(&part);
-            continue;
-        }
-
-        polygon_cspan part_poly;
-        std::span<const glm::dvec2> part_verts;
-
-        if (part.obj_type == OBJ_TYPE_AREA) [[ unlikely ]] {
-            part_poly = m_bldg_areas[part.id].rings;
-        } else {
-            part_verts = part.verts;
-            part_poly = std::span(&part_verts, 1);
-        }
-
-        building* mapped_bldg = nullptr;
-        for (size_t icand = 0; icand < inter_bldgs.size(); ++icand) 
+        for (auto& part : m_building_parts)
         {
-            polygon_cspan bldg_poly;
-            std::span<const glm::dvec2> bldg_verts;
+            auto inter_bldgs = bldg_tree.query_bbox_all(part.bbox);
+            if (inter_bldgs.empty()) {
+                logDEBUG(LOG_WARNING, "Part %lld tree query returned nothing", part.id);
+                unmapped_parts.push_back(&part);
+                continue;
+            }
 
-            if (inter_bldgs[icand]->base.obj_type == OBJ_TYPE_AREA) [[ unlikely ]] {
-                bldg_poly = m_bldg_areas[inter_bldgs[icand]->base.id].rings;
+            polygon_cspan part_poly;
+            std::span<const glm::dvec2> part_verts;
+
+            if (part.obj_type == OBJ_TYPE_AREA) [[ unlikely ]] {
+                part_poly = m_bldg_areas[part.id].rings;
             } else {
-                bldg_verts = inter_bldgs[icand]->base.verts;
-                bldg_poly = std::span(&bldg_verts, 1);
+                part_verts = part.verts;
+                part_poly = std::span(&part_verts, 1);
             }
+
+            building* mapped_bldg = nullptr;
+            for (size_t icand = 0; icand < inter_bldgs.size(); ++icand) 
+            {
+                polygon_cspan bldg_poly;
+                std::span<const glm::dvec2> bldg_verts;
+
+                if (inter_bldgs[icand]->base.obj_type == OBJ_TYPE_AREA) [[ unlikely ]] {
+                    bldg_poly = m_bldg_areas[inter_bldgs[icand]->base.id].rings;
+                } else {
+                    bldg_verts = inter_bldgs[icand]->base.verts;
+                    bldg_poly = std::span(&bldg_verts, 1);
+                }
             
-            if (polygon_covered_by(part_poly, bldg_poly)) {
-                mapped_bldg = inter_bldgs[icand];
-                break;
+                if (polygon_covered_by(part_poly, bldg_poly)) {
+                    mapped_bldg = inter_bldgs[icand];
+                    break;
+                }
+            }
+            if (mapped_bldg) {
+                mapped_bldg->parts.push_back(&part);
+            } else {
+                logDEBUG(LOG_MESSAGE, "Could not map part %lld to a building", part.id);
+                logDEBUG(LOG_MESSAGE, "Tried candidates:");
+                for (auto& bldg : inter_bldgs) {
+                    logDEBUG(LOG_MESSAGE, "  Building %lld", bldg->base.id);
+                }
+                unmapped_parts.push_back(&part);
             }
         }
-        if (mapped_bldg) {
-            mapped_bldg->parts.push_back(&part);
-        } else {
-            logDEBUG(LOG_MESSAGE, "Could not map part %lld to a building", part.id);
-            logDEBUG(LOG_MESSAGE, "Tried candidates:");
-            for (auto& bldg : inter_bldgs) {
-                logDEBUG(LOG_MESSAGE, "  Building %lld", bldg->base.id);
-            }
-            unmapped_parts.push_back(&part);
+
+        if (!unmapped_parts.empty()) {
+            logWARNING("%zu/%zu part(s) could not be mapped to a building", 
+                unmapped_parts.size(), m_building_parts.size());
         }
     }
+    step_done("Mapping parts to buildings", clk::now() - tbegin_map);
 
-    if (!unmapped_parts.empty()) {
-        logWARNING("%zu/%zu part(s) could not be mapped to a building", 
-            unmapped_parts.size(), m_building_parts.size());
-    }
+    const glm::vec4 building_color(0.85f, 0.75f, 0.65f, 1.0f);
 
-    const glm::vec4 building_color(0.5f, 0.5f, 0.5f, 1.0f);
-
-    // build meshes from the parts
-    for (auto& building : m_buildings)
+    // Build meshes from the parts
+    auto tbegin_mesh = clk::now();
     {
-        if (building.name.empty()) {
-            logDEBUG(LOG_MESSAGE, "Adding building %lld", building.base.id);
-        } else {
-            logDEBUG(LOG_MESSAGE, "Adding building %lld (%s)", building.base.id, building.name.c_str());
-        }
-
-        if (building.parts.empty() || building.base.has_ht_top)
+        for (auto& building : m_buildings)
         {
-            draw_datad dd;
-            if (get_building_part_mesh(dd, building.base)) {
-                dd.color = building_color;
-                dd.name = building.name.empty() ? "bldg " + std::to_string(building.base.id) : building.name;
-                drawdata.push_back(std::move(dd));
+            if (building.name.empty()) {
+                logDEBUG(LOG_MESSAGE, "Adding building %lld", building.base.id);
+            } else {
+                logDEBUG(LOG_MESSAGE, "Adding building %lld (%s)", building.base.id, building.name.c_str());
+            }
+
+            if (building.parts.empty() || building.base.has_ht_top)
+            {
+                draw_datad dd;
+                if (get_building_part_mesh(dd, building.base)) {
+                    dd.color = building_color;
+                    dd.name = building.name.empty() ? "bldg " + std::to_string(building.base.id) : building.name;
+                    add_drawdata(std::move(dd));
+                }
+            }
+            for (auto* part : building.parts)
+            {
+                logDEBUG(LOG_MESSAGE, "   Adding part %lld", part->id);
+
+                draw_datad dd;
+                if (get_building_part_mesh(dd, *part)) {
+                    dd.color = building_color;
+                    dd.name = "part " + std::to_string(part->id);
+                    add_drawdata(std::move(dd));
+                }
             }
         }
-        for (auto* part : building.parts)
-        {
-            logDEBUG(LOG_MESSAGE, "   Adding part %lld", part->id);
 
+        for (auto* part : unmapped_parts)
+        {
             draw_datad dd;
             if (get_building_part_mesh(dd, *part)) {
                 dd.color = building_color;
                 dd.name = "part " + std::to_string(part->id);
-                drawdata.push_back(std::move(dd));
+                add_drawdata(std::move(dd));
             }
         }
     }
+    step_done("Building meshes", clk::now() - tbegin_mesh);
 
-    for (auto* part : unmapped_parts)
-    {
-        draw_datad dd;
-        dd.color = building_color;
-        dd.name = "part " + std::to_string(part->id);
-        get_building_part_mesh(dd, *part);
-
-        drawdata.push_back(std::move(dd));
-    }
+    auto tend = clk::now();
+    logMESSAGE("Generated %u tris and %u vertices in %s",
+        num_tris, num_verts, time_str(tend - tbegin).c_str());
 
     return true;
 }

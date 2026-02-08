@@ -3,7 +3,7 @@
 #include <osmium/handler/node_locations_for_ways.hpp>
 #include <osmium/area/assembler.hpp>
 #include <osmium/area/multipolygon_manager.hpp>
-#include <osmium/io/xml_input.hpp>
+#include <osmium/io/any_input.hpp>
 #include <osmium/visitor.hpp>
 #include <osmium/geom/coordinates.hpp>
 #include <osmium/geom/mercator_projection.hpp>
@@ -23,7 +23,7 @@ static bool str_equal(const char* str1, const char* str2)
     return std::strcmp(str1, str2) == 0;
 }
 
-// Osmium manager for OSM data.
+// Osmium manager class that receives all the OSM data.
 // 
 // This duplicates some functionality from MultiPolygonManager 
 // since CRTP makes it impossible to override way_not_in_any_relation etc.
@@ -62,8 +62,12 @@ public:
 
         for (const auto& member : relation.members()) {
             if (member.ref() != 0) {
-                ways.push_back(this->get_member_way(member.ref()));
-                assert(ways.back() != nullptr);
+                auto way = this->get_member_way(member.ref());
+                // this fixes a bug in osmium
+                if (!way) {
+                    continue;
+                }
+                ways.push_back(way);
             }
         }
         try {
@@ -110,17 +114,22 @@ public:
         
         if (highway && !str_equal(highway, "footway"))
         {
-            int lanes;
+            int lanes, layer;
             double width;
             bool has_width = parse_num_if_exists(tags["width"], width);
             bool has_lanes = parse_num_if_exists(tags["lanes"], lanes);
+            bool has_layer = parse_num_if_exists(tags["layer"], layer);
 
-            m_mesh_builder.add_highway({
-                .way = &way,
-                .type = WAY_TYPE_STREET,
-                .lanes = has_lanes ? lanes : -1,
-                .width = has_width ? width : has_lanes ? lanes * 3.5 : 3.5
-            });
+            if (!has_layer || (has_layer && layer >= 0)) // underground not supported yet
+            {
+                m_mesh_builder.add_highway({
+                    .way = &way,
+                    .type = WAY_TYPE_STREET,
+                    .lanes = has_lanes ? lanes : -1,
+                    .layer = has_layer ? layer : 0,
+                    .width = has_width ? width : has_lanes ? lanes * 3.5 : 3.5
+                });
+            }
         }
         else if (str_equal(highway, "footway") && !str_equal(tags["footway"], "crossing"))
         {
