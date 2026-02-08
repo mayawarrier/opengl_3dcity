@@ -103,7 +103,7 @@ double angle_bw(const glm::dvec2& a, const glm::dvec2& b);
 
 // Get unoriented angle between two normalized vectors (in radians).
 // Returns value in [0, pi].
-double angle_bw_unitdirs(const glm::dvec2& a, const glm::dvec2& b);
+double angle_bw_unitvecs(const glm::dvec2& a, const glm::dvec2& b);
 
 // Get minimum unoriented angle between two vectors (in radians).
 // Returns value in [0, pi/2].
@@ -111,7 +111,7 @@ double min_angle_bw(const glm::dvec2& a, const glm::dvec2& b);
 
 // Get minimum unoriented angle between two normalized vectors (in radians).
 // Returns value in [0, pi/2].
-double min_angle_bw_unitdirs(const glm::dvec2& a, const glm::dvec2& b);
+double min_angle_bw_unitvecs(const glm::dvec2& a, const glm::dvec2& b);
 
 // Get minimum angle between two segments (in radians).
 // Returns value in [0, pi/2].
@@ -121,6 +121,9 @@ inline double min_angle_bw_segs(const segment& seg1, const segment& seg2)
     glm::dvec2 dir2 = seg2.second - seg2.first;
     return min_angle_bw(dir1, dir2);
 }
+
+// Rotate a 2D vector by angle (radians CCW).
+glm::dvec2 rotate_vec2(const glm::dvec2& vec, double angle);
 
 inline orient_t orient_type(double value)
 {
@@ -155,19 +158,11 @@ bool polygon_covered_by(polygon_cspan inner_poly, polygon_cspan outer_poly);
 // Triangulate polygon.
 std::vector<uint32_t> polygon_triangulate(polygon_cspan polygon);
 
+// Check if triangles are oriented CCW or collinear.
+bool check_triangles_oriented(std::span<const glm::dvec2> verts, std::span<const uint32_t> indices);
+
 // Triangulate a thick polyline.
 void polyline_triangulate(std::span<const glm::dvec2> polyline, double width, draw_datad& dd, double eps = 1e-9);
 
-// Check if two bounding boxes intersect.
-template <int N>
-bool bbox_intersects_bbox(const bbox<N>& lhs, const bbox<N>& rhs)
-{
-    // Check if there is some overlap on the right 
-    // (i.e. min before other box's max) and some overlap 
-    // on the left (max after other box's min)
-    return
-        glm::all(glm::lessThanEqual(lhs.min, rhs.max)) &&
-        glm::all(glm::greaterThanEqual(lhs.max, rhs.min));
-}
 
 #endif

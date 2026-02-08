@@ -84,8 +84,6 @@ seg_project_result seg_project_point(const segment& seg, glm::dvec2 point)
     };
 }
 
-
-
 glm::dvec2 seg_normal(const segment& seg, direction dir, double width)
 {
     return (dir == DIR_LEFT ? 1 : -1) * width *
@@ -101,19 +99,29 @@ double angle_bw(const glm::dvec2& a, const glm::dvec2& b)
     return std::acos(std::clamp(cos_angle_bw(a, b), -1.0, 1.0));
 }
 
-double angle_bw_unitdirs(const glm::dvec2& a, const glm::dvec2& b)
+double angle_bw_unitvecs(const glm::dvec2& a, const glm::dvec2& b)
 {
     return std::acos(std::clamp(glm::dot(a, b), -1.0, 1.0));
 }
 
 double min_angle_bw(const glm::dvec2& a, const glm::dvec2& b)
 {
-    return std::acos(std::abs(cos_angle_bw(a, b)));
+    return std::acos(std::clamp(std::abs(cos_angle_bw(a, b)), 0.0, 1.0));
 }
 
-double min_angle_bw_unitdirs(const glm::dvec2& a, const glm::dvec2& b)
+double min_angle_bw_unitvecs(const glm::dvec2& a, const glm::dvec2& b)
 {
-    return std::acos(std::abs(glm::dot(a, b)));
+    return std::acos(std::clamp(std::abs(glm::dot(a, b)), 0.0, 1.0));
+}
+
+glm::dvec2 rotate_vec2(const glm::dvec2& vec, double angle)
+{
+    double cos_angle = std::cos(angle);
+    double sin_angle = std::sin(angle);
+    return {
+        vec.x * cos_angle - vec.y * sin_angle,
+        vec.x * sin_angle + vec.y * cos_angle
+    };
 }
 
 // https://en.wikipedia.org/wiki/Shoelace_formula
@@ -150,7 +158,7 @@ bool polygon_covered_by(polygon_cspan inner, polygon_cspan outer)
 {
     using namespace Clipper2Lib;
 
-    bbox2d bbox;
+    bbox2d bbox = bbox2d::empty();
     PathsD clip_path = get_clipper_poly(outer, bbox);
     PathsD subj_path = get_clipper_poly(inner, bbox);
 
@@ -187,56 +195,23 @@ namespace mapbox {
     }
 }
 
-// Presents a reversed view of a container without copying it.
-// Can't use std::views::reverse() because that doesn't have container typedefs.
-template <typename T>
-class reversed_view
-{
-public:
-    using value_type = typename T::value_type;
-    using const_reference = typename T::const_reference;
-    using const_iterator = typename T::reverse_iterator;
-    using difference_type = typename const_iterator::difference_type;
-    using size_type = typename T::size_type;
-
-    reversed_view(const T& data) :
-        m_data(data)
-    {}
-
-    size_type size() const { return m_data.size(); }
-
-    bool empty() const { return begin() == end(); }
-
-    const_iterator begin() const { return m_data.rbegin(); }
-    const_iterator end() const { return m_data.rend(); }
-
-    const_reference operator[](size_type pos) const {
-        return m_data[m_data.size() - pos - 1];
-    }
-
-private:
-    const T& m_data;
-};
-
 std::vector<uint32_t> polygon_triangulate(polygon_cspan polygon)
 {
     return mapbox::earcut<uint32_t>(polygon);
+}
 
-    //if (orient == ORIENT_CW) {
-    //    std::array<std::span<const glm::dvec2>, 1> polygon = { { verts } };
-    //    return mapbox::earcut<uint32_t>(polygon);
-    //} 
-    //else {
-    //    assert(orient == ORIENT_CCW);
-    //    // earcut claims to handle CCW polygons properly, but it does not. Make it CW.
-    //    std::array<reversed_view<std::span<const glm::dvec2>>, 1> polygon = { { verts } };
-
-    //    auto ret = mapbox::earcut<uint32_t>(polygon);
-    //    for (auto& idx : ret) {
-    //        idx = uint32_t(verts.size()) - idx - 1;
-    //    }
-    //    return ret;        
-    //}
+bool check_triangles_oriented(std::span<const glm::dvec2> verts, std::span<const uint32_t> indices)
+{
+    for (size_t i = 0; i < indices.size(); i += 3)
+    {
+        auto& v0 = verts[indices[i]];
+        auto& v1 = verts[indices[i + 1]];
+        auto& v2 = verts[indices[i + 2]];
+        if (orient(v0, v1, v2) == ORIENT_CW) {
+            return false;
+        }
+    }
+    return true;
 }
 
 static void segment_triangulate(glm::dvec2 p0, glm::dvec2 p1, double width, draw_datad& dd)
@@ -249,8 +224,8 @@ static void segment_triangulate(glm::dvec2 p0, glm::dvec2 p1, double width, draw
     dd.add_vertex({ p1 + norm, 0.0 });
     dd.add_vertex({ p1 - norm, 0.0 });
 
-    dd.add_triangle_w_offset(0, 1, 3, vert_startidx);
-    dd.add_triangle_w_offset(3, 1, 2, vert_startidx);
+    dd.add_triangle_w_offset(0, 3, 1, vert_startidx);
+    dd.add_triangle_w_offset(3, 2, 1, vert_startidx);
 }
 
 struct stitch_edge
@@ -264,6 +239,38 @@ struct stitch_edge
     }
 };
 
+// Rare case when corner is really a straight line segment.
+static stitch_edge degen_corner_triangulate(glm::dvec2 p0, glm::dvec2 p1, glm::dvec2 p2,
+    const stitch_edge& stitch_edge, double width, draw_datad& dd, double eps)
+{
+    glm::dvec2 norm = (width / 2.0) * glm::normalize(vec_perp(p1 - p0));
+
+    uint32_t top_next_idx = dd.add_vertex({ p2 + norm, 0.0 });
+    uint32_t bot_next_idx = dd.add_vertex({ p2 - norm, 0.0 });
+
+    assert(!(stitch_edge.valid() && stitch_edge.orient == ORIENT_COLL));
+    bool prev_is_ccw = !stitch_edge.valid() || stitch_edge.orient == ORIENT_CCW;
+
+    uint32_t top_prev_idx, bot_prev_idx;
+    if (stitch_edge.valid()) {
+        // when CCW, prev inner is along normal, when CW, prev outer is along normal
+        top_prev_idx = prev_is_ccw ? stitch_edge.inner_idx : stitch_edge.outer_idx;
+        bot_prev_idx = prev_is_ccw ? stitch_edge.outer_idx : stitch_edge.inner_idx;
+    } else {
+        top_prev_idx = dd.add_vertex({ p0 + norm, 0.0 });
+        bot_prev_idx = dd.add_vertex({ p0 - norm, 0.0 });
+    }
+
+    dd.add_triangle(top_prev_idx, bot_next_idx, top_next_idx);
+    dd.add_triangle(bot_next_idx, top_prev_idx, bot_prev_idx);
+
+    return {
+        .orient = prev_is_ccw ? ORIENT_CCW : ORIENT_CW,
+        .inner_idx = prev_is_ccw ? top_next_idx : bot_next_idx,
+        .outer_idx = prev_is_ccw ? bot_next_idx : top_next_idx
+    };
+}
+
 static stitch_edge corner_triangulate(glm::dvec2 p0, glm::dvec2 p1, glm::dvec2 p2, 
     const stitch_edge& stitch_edge, double width, draw_datad& dd, double eps)
 {
@@ -272,11 +279,14 @@ static stitch_edge corner_triangulate(glm::dvec2 p0, glm::dvec2 p1, glm::dvec2 p
 
     // point towards outward bend
     orient_t orient = ::orient(p0, p1, p2);
-    if (orient == ORIENT_CCW) {
+    if (orient == ORIENT_COLL) {
+        return degen_corner_triangulate(p0, p1, p2, stitch_edge, width, dd, eps);
+    }
+    else if (orient == ORIENT_CCW) {
         norm1 = -norm1;
         norm2 = -norm2;
     }
-
+    
     glm::dvec2 inner_p0 = p0 - norm1, outer_p0 = p0 + norm1;
     glm::dvec2 inner_p2 = p2 - norm2, outer_p2 = p2 + norm2;
     glm::dvec2 outer_p1_seg1 = p1 + norm1, outer_p1_seg2 = p1 + norm2;
@@ -284,43 +294,49 @@ static stitch_edge corner_triangulate(glm::dvec2 p0, glm::dvec2 p1, glm::dvec2 p
     seg_inter_result inter_result;
     seg_intersect({ outer_p0, outer_p1_seg1 }, { outer_p2, outer_p1_seg2 }, inter_result, eps);
 
+    if (inter_result.type == SEG_INTER_PARALLEL || inter_result.type == SEG_INTER_COINCIDENT) {
+        return degen_corner_triangulate(p0, p1, p2, stitch_edge, width, dd, eps);
+    }
+
     glm::dvec2 norm_mid = inter_result.point - p1;
     glm::dvec2 inner_mid = p1 - norm_mid, outer_mid = inter_result.point;
 
     uint32_t inner_p0_idx, outer_p0_idx;
     if (stitch_edge.valid()) 
     {
+        assert(stitch_edge.orient != ORIENT_COLL);
         inner_p0_idx = stitch_edge.inner_idx;
         outer_p0_idx = stitch_edge.outer_idx;
-        if (stitch_edge.orient != orient) { std::swap(inner_p0_idx, outer_p0_idx); }
+        if (stitch_edge.orient != orient) { 
+            std::swap(inner_p0_idx, outer_p0_idx); 
+        }
     } 
     else {
         inner_p0_idx = dd.add_vertex({ inner_p0, 0.0 });
         outer_p0_idx = dd.add_vertex({ outer_p0, 0.0 }); 
     }
-    
+
     uint32_t outer_p1_seg1_idx = dd.add_vertex({ outer_p1_seg1, 0.0 });
-    uint32_t inner_mid_idx     = dd.add_vertex({ inner_mid,     0.0 });
-    uint32_t outer_mid_idx     = dd.add_vertex({ outer_mid,     0.0 });
+    uint32_t inner_mid_idx     = dd.add_vertex({ inner_mid,     0.0 });   
     uint32_t outer_p1_seg2_idx = dd.add_vertex({ outer_p1_seg2, 0.0 });
     uint32_t inner_p2_idx      = dd.add_vertex({ inner_p2,      0.0 });
     uint32_t outer_p2_idx      = dd.add_vertex({ outer_p2,      0.0 });
 
-    bool remove_mid_tri = glm::degrees(angle_bw(
-        outer_p1_seg2 - inner_mid, outer_p1_seg1 - inner_mid)) < 20.0;
+    bool remove_mid_tri = angle_bw(outer_p1_seg2 - inner_mid, outer_p1_seg1 - inner_mid) < glm::radians(20.0);
 
     // Segment 1
-    dd.add_triangle(inner_p0_idx, outer_p0_idx, inner_mid_idx);
-    dd.add_triangle(outer_p0_idx, (remove_mid_tri ? outer_p1_seg2_idx : outer_p1_seg1_idx), inner_mid_idx);
-
-    if (!remove_mid_tri) {
-        dd.add_triangle(inner_mid_idx, outer_p1_seg1_idx, outer_p1_seg2_idx); 
-        dd.add_triangle(outer_p1_seg1_idx, outer_mid_idx, outer_p1_seg2_idx); // remove for bevelled corners
-    }
+    dd.add_triangle(inner_p0_idx, inner_mid_idx, outer_p0_idx);
+    dd.add_triangle(outer_p0_idx, inner_mid_idx, (remove_mid_tri ? outer_p1_seg2_idx : outer_p1_seg1_idx));
     
+    if (!remove_mid_tri) {
+        uint32_t outer_mid_idx = dd.add_vertex({ outer_mid, 0.0 });
+        dd.add_triangle(inner_mid_idx, outer_p1_seg2_idx, outer_p1_seg1_idx);
+        dd.add_triangle(outer_p1_seg1_idx, outer_p1_seg2_idx, outer_mid_idx); // remove for bevelled corners
+    }
+
     // Segment 2
-    dd.add_triangle(inner_mid_idx, outer_p2_idx, inner_p2_idx);
-    dd.add_triangle(inner_mid_idx, outer_p1_seg2_idx, outer_p2_idx);
+    dd.add_triangle(inner_mid_idx, inner_p2_idx, outer_p2_idx);
+    dd.add_triangle(inner_mid_idx, outer_p2_idx, outer_p1_seg2_idx);
 
     return { 
         .orient = orient, 
@@ -329,7 +345,7 @@ static stitch_edge corner_triangulate(glm::dvec2 p0, glm::dvec2 p1, glm::dvec2 p
     };
 }
 
-// https://www.codeproject.com/Articles/226569/Drawing-polylines-by-tessellation
+// based on https://www.codeproject.com/Articles/226569/Drawing-polylines-by-tessellation
 void polyline_triangulate(std::span<const glm::dvec2> polyline, double width, draw_datad& dd, double eps)
 {
     if (polyline.size() < 2) {
