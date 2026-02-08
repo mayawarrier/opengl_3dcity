@@ -10,16 +10,22 @@
 #include "fwd.hpp"
 
 
-// Default data returned from nearest query.
-struct aabb_querydata
+// Data returned from query_nearest().
+// Extend this struct to add more data.
+struct aabb_tree_qdata
 {
     double sqdist;
 };
 
-//
+
 // Axis-aligned bounding box tree.
-// Does not own the objects stored. It is expected that the object type 
-// is a pointer or a cheap-to-copy type that points to the actual data.
+// 
+// - Static (can be built only once).
+// - Does not own the objects stored. 
+// - Object type should be a pointer or a cheap-to-copy
+//   type that points to the actual data.
+// - Calling Traits::bbox(obj) should be free (i.e. the 
+//   object should store its own bbox).
 //
 template <int N, typename T, typename Traits>
 class aabb_tree
@@ -27,12 +33,12 @@ class aabb_tree
 private:
     struct node 
     {
-        node* left;
-        node* right;
-        bbox<N> bbox;
-    };
-    struct leafnode : public node {
-        T data;
+        union udata {
+            bbox<N> bbox;
+            T obj;
+        } data;
+        int lt_idx;
+        int rt_idx;
     };
 
     static_assert(requires {
@@ -40,11 +46,12 @@ private:
     }, "Invalid Traits type.");
 
 public:
-    aabb_tree() :
-        m_root(nullptr)
+    aabb_tree() : 
+        m_rootidx(-1) 
     {}
 
-    HANDLE_CLASS(aabb_tree, m_root, nullptr)
+    DISABLE_COPY(aabb_tree)
+    DEFAULT_MOVE(aabb_tree)
 
     // Changes the order of the source array!
     static aabb_tree create_unsafe(std::span<T> objects) {
@@ -54,27 +61,29 @@ public:
     std::vector<T> query_bbox_all(const bbox<N>& query_bbox) const
     {
         std::vector<T> ret;
-        // Good for trees with upto 2^16 objects.
-        types::small_vector<const node*, 16> nodes;
 
-        auto check_subtree = [&](const node* node) {
-            if (node && bbox_intersects_bbox(node->bbox, query_bbox))
-                nodes.push_back(node);
+        // Good for upto 2^16 objects.
+        types::small_vector<int, 16> search_nodeids;
+
+        auto check_subtree = [&](int nidx) {
+            if (has_nodeid(nidx) && query_bbox.intersects(node_bbox(m_nodes[nidx]))) {
+                search_nodeids.push_back(nidx);
+            }
         };
 
-        check_subtree(m_root);
+        check_subtree(m_rootidx);
 
-        while (!nodes.empty())
+        while (!search_nodeids.empty())
         {
-            auto* node = nodes.back();
-            nodes.pop_back();
+            int nidx = search_nodeids.back();
+            auto& node = m_nodes[nidx];
+            search_nodeids.pop_back();
 
-            check_subtree(node->left);
-            check_subtree(node->right);
+            check_subtree(node.lt_idx);
+            check_subtree(node.rt_idx);
 
-            if (!node->left && !node->right) {
-                auto* leaf = (const leafnode*)node;
-                ret.push_back(leaf->data);
+            if (is_leaf(node)) {
+                ret.push_back(node.data.obj);
             }
         }
         return ret;
@@ -83,50 +92,51 @@ public:
     //
     // Get the nearest object in the tree to the query (ray or point).
     // Rays must be normalized.
-    // \param obj_intersect_cb Callback fn to confirm intersection with object.
+    // \param obj_intersect_cb Callback fn to confirm intersection with object when query intersects its bbox.
     // \param out_qdata Additional data about the intersection/object.
     //
-    template <typename QueryData = aabb_querydata>
-    bool query_nearest(const auto& query, const param_range& dist_range, 
-        auto obj_intersect_cb, T& out_object, QueryData& out_qdata) const
+    template <class QueryData = aabb_tree_qdata>
+    bool query_nearest(const auto& query, 
+        const param_range& dist_range, auto obj_intersect_cb, T& out_object, QueryData& out_qdata) const
     {
         static_assert(requires {
-            { std::invoke(obj_intersect_cb, 
-                std::declval<const T&>(), std::declval<QueryData&>()) } -> std::same_as<bool>;
+            { std::invoke(obj_intersect_cb, std::declval<const T&>(), std::declval<QueryData&>()) } -> std::same_as<bool>;
         }, "Invalid obj_intersect callback.");
 
         const T* best_object = nullptr;
         QueryData best_qdata{};
         best_qdata.sqdist = std::numeric_limits<double>::infinity();
 
-        // Good for trees with upto 2^16 objects.
-        types::small_vector<const node*, 16> nodes;
+        // Good for upto 2^16 objects.
+        types::small_vector<int, 16> search_nodeids;
 
-        auto check_subtree = [&](const node* node) 
+        auto check_subtree = [&](int nidx) 
         {
             double sqdist = std::numeric_limits<double>::infinity();
-            if (node && intersects_subtree(node, query, dist_range, sqdist) && sqdist < best_qdata.sqdist)
-                nodes.push_back(node);
+            if (has_nodeid(nidx) &&
+                intersects_subtree(query, node_bbox(m_nodes[nidx]), dist_range, sqdist) &&
+                sqdist < best_qdata.sqdist) {
+                search_nodeids.push_back(nidx);
+            }
         };
 
-        check_subtree(m_root);
+        check_subtree(m_rootidx);
         
-        while (!nodes.empty())
+        while (!search_nodeids.empty())
         {
-            auto* node = nodes.back();
-            nodes.pop_back();
+            int nidx = search_nodeids.back();
+            auto& node = m_nodes[nidx];
+            search_nodeids.pop_back();
 
-            check_subtree(node->left);
-            check_subtree(node->right);
+            check_subtree(node.lt_idx);
+            check_subtree(node.rt_idx);
 
-            if (!node->left && !node->right) 
+            if (is_leaf(node))
             {
-                auto* leaf = (const leafnode*)node;
-
                 QueryData qdata{};
-                bool inter = std::invoke(obj_intersect_cb, leaf->data, qdata);
+                bool inter = std::invoke(obj_intersect_cb, node.data.obj, qdata);
                 if (inter && qdata.sqdist < best_qdata.sqdist) {
-                    best_object = &leaf->data;
+                    best_object = &node.data.obj;
                     best_qdata = std::move(qdata);
                 }
             }
@@ -139,16 +149,11 @@ public:
         else { return false; }
     }
 
-    ~aabb_tree() {
-        delete_tree(m_root);
-    }
-
 private:
-    bool intersects_subtree(const node* node, const ray2d& ray, 
-        const param_range& dist_range, double& out_sqdist) const
+    bool intersects_subtree(const ray2d& ray, 
+        const bbox<N>& subtree_bbox, const param_range& dist_range, double& out_sqdist) const
     {
-        auto& bbox = node->bbox;
-
+        auto& bbox = subtree_bbox;
         double dentry = -std::numeric_limits<double>::infinity();
         double dexit = std::numeric_limits<double>::infinity();
 
@@ -180,10 +185,10 @@ private:
         return true;
     }
 
-    bool intersects_subtree(const node* node, const glm::dvec2& query, 
-        const param_range& radius_range, double& out_sqdist) const
+    bool intersects_subtree(const glm::dvec2& query, 
+        const bbox<N>& subtree_bbox, const param_range& radius_range, double& out_sqdist) const
     {
-        auto& bbox = node->bbox;
+        auto& bbox = subtree_bbox;
         assert(radius_range.nonneg());
 
         double dmin2 = 0.0, dmax2 = 0.0;
@@ -215,68 +220,72 @@ private:
         return true;
     }
 
-    aabb_tree(std::span<T> objects) :
-        m_root(make_tree(objects.data(), objects.size()))
-    {}
+    aabb_tree(std::span<T> objects) {
+        m_rootidx = make_tree(objects.data(), objects.size());
+    }
 
-    node* make_tree(T* objects, size_t num_objects)
+    int make_tree(T* objects, size_t num_objects)
     {
         if (num_objects == 0) {
-            return nullptr;
+            return -1;
         }
         else if (num_objects == 1)
         {
-            auto* node = new leafnode();
-            node->left = nullptr;
-            node->right = nullptr;
-            node->bbox = Traits::bbox(objects[0]);
-            node->data = objects[0];
-            return node;
+            int node_idx = int(m_nodes.size());
+            auto& node = m_nodes.emplace_back();
+
+            node.data.obj = objects[0];
+            node.lt_idx = -1;
+            node.rt_idx = -1;
+            return node_idx;
         }
         else {
-            auto* n = new node();
+            int node_idx = int(m_nodes.size());
+            auto& node = m_nodes.emplace_back();
+            auto& node_bb = node.data.bbox;
 
+            node_bb = bbox<N>::empty();
             for (size_t i = 0; i < num_objects; ++i) {
-                n->bbox.extend(Traits::bbox(objects[i]));
+                node_bb.extend(Traits::bbox(objects[i]));
             }
 
-            auto dim_sizes = n->bbox.max - n->bbox.min;
+            auto dim_sizes = node_bb.max - node_bb.min;
             int longest_dim = vec_argmax(dim_sizes);
 
-            std::sort(objects, objects + num_objects,
-                [&](const T& lhs, const T& rhs) 
-                {
-                    double lhs_dim = Traits::bbox(lhs).center()[longest_dim];
-                    double rhs_dim = Traits::bbox(rhs).center()[longest_dim];
-                    return lhs_dim < rhs_dim;
-                });
-
-            size_t lhs_size = num_objects / 2; // truncated
-            size_t rhs_size = num_objects - lhs_size;
-
             // Divide objects into half along longest dimension
-            n->left = make_tree(objects, lhs_size);
-            n->right = make_tree(objects + lhs_size, rhs_size);
-            return n;
+            std::sort(objects, objects + num_objects, [&](const T& lhs, const T& rhs) 
+            {
+                double lhs_dim = Traits::bbox(lhs).center()[longest_dim];
+                double rhs_dim = Traits::bbox(rhs).center()[longest_dim];
+                return lhs_dim < rhs_dim;
+            });
+            size_t lt_size = num_objects / 2; // truncates
+            size_t rt_size = num_objects - lt_size;
+
+            // Node reference is invalid after this point because subsequent
+            // make_tree() calls can cause m_nodes to reallocate, so use node_idx
+            m_nodes[node_idx].lt_idx = make_tree(objects, lt_size);
+            m_nodes[node_idx].rt_idx = make_tree(objects + lt_size, rt_size);
+
+            return node_idx;
         }
     }
 
-    void delete_tree(node* node)
-    {
-        if (!node) { return; }
+    inline bool has_nodeid(int node_idx) const {
+        return node_idx != -1;
+    }
 
-        delete_tree(node->left);
-        delete_tree(node->right);
+    inline bool is_leaf(const node& n) const {
+        return !has_nodeid(n.lt_idx) && !has_nodeid(n.rt_idx);
+    }
 
-        if (!node->left && !node->right) {
-            delete (leafnode*)node;
-        } else {
-            delete node;
-        }
+    inline const bbox<N>& node_bbox(const node& n) const {
+        return is_leaf(n) ? Traits::bbox(n.data.obj) : n.data.bbox;
     }
 
 private:
-    node* m_root;
+    std::vector<node> m_nodes;
+    int m_rootidx; // -1 or 0
 };
 
 #endif

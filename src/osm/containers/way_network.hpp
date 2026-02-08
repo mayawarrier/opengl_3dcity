@@ -21,6 +21,7 @@
 template <typename TWay, typename Traits>
 struct way_network
 {
+public:
     static_assert(requires {
         { Traits::way_type(std::declval<const TWay*>()) } -> std::same_as<way_type>;
     }, "Invalid Traits type.");
@@ -34,10 +35,8 @@ struct way_network
         types::flat_set<osmium::object_id_type> adj_node_ids;
     };
 
-    struct edge
-    {
+    struct edge {
         const TWay* way;
-        bool visited;
     };
 
     using edge_idpair = std::pair<osmium::object_id_type, osmium::object_id_type>;
@@ -62,12 +61,15 @@ struct way_network
         }
     };
 
-    types::unord_flat_map<osmium::object_id_type, node> nodes;
-    types::unord_flat_map<edge_idpair, edge, edge_idpair_hash, edge_idpair_equals> edges;
+    template <class T>
+    using edge_map_t = types::unord_flat_map<edge_idpair, T, edge_idpair_hash, edge_idpair_equals>;
 
-    using node_itr = decltype(nodes)::iterator;
-    using edge_itr = decltype(edges)::iterator;
+    using nodes_t = types::unord_flat_map<osmium::object_id_type, node>;
+    using edges_t = edge_map_t<edge>;
+    using node_itr = typename nodes_t::iterator;
+    using edge_itr = typename edges_t::iterator;
 
+public:
     node_itr get_or_add_node(osmium::object_id_type id, glm::dvec2 vert)
     {
         auto nodeitr = nodes.find(id);
@@ -83,7 +85,7 @@ struct way_network
     {
         //assert(!edges.contains(node_ids)); // todo: check why this fails
 
-        edge e = { .way = way, .visited = false };
+        edge e = { .way = way };
         return edges.insert({ node_ids, std::move(e) }).first;
     }
 
@@ -91,38 +93,43 @@ struct way_network
     {
         struct node 
         {
-            osmium::object_id_type id;
-            glm::dvec2 vert;
-
+            osm_node osm_node;
             // way into this node from the previous node,
             // null for the first node in the path
             const TWay* in_way;
 
-            osm_node osm_node() const noexcept { 
-                return { id, vert }; 
+            osmium::object_id_type id() const {
+                return osm_node.id; 
+            }
+            const glm::dvec2& vert() const { 
+                return osm_node.vert; 
             }
         };
         std::vector<node> nodes;
         way_type type;
     };
 
-    // Collect path to the nearest intersection.
-    // Marks edges as visited along the way.
+    //
+    // Collect path from start_node towards adj_nodeid until the next intersection.
     // \param nodeitr - iterator to starting node
     // \param adj_nodeid - id of adjacent node to start collecting from
-    bool path_to_intersection(node_itr start_nodeitr, osmium::object_id_type adj_nodeid, path& out_path)
+    // \param edges_visited - map of edges already visited
+    //
+    bool path_to_intersection(node_itr start_node, osmium::object_id_type adj_nodeid, edge_map_t<bool>& edges_visited, path& out_path)
     {
-        assert(start_nodeitr->second.adj_node_ids.contains(adj_nodeid));
+        assert(start_node->second.adj_node_ids.contains(adj_nodeid));
 
-        std::vector<path::node> path_nodes;
+        std::vector<typename path::node> path_nodes;
 
-        auto cur_nodeid = start_nodeitr->first;
+        auto cur_nodeid = start_node->first;
         auto next_nodeid = adj_nodeid;
         const TWay* prev_edgeway = nullptr;
 
         path_nodes.push_back({
-            .id = start_nodeitr->first,
-            .vert = start_nodeitr->second.vert,
+            .osm_node = {
+                .id = start_node->first,
+                .vert = start_node->second.vert
+            },
             .in_way = nullptr
         });
 
@@ -137,49 +144,52 @@ struct way_network
             assert_msg(edgeitr != edges.end(),
                 "Missing graph edge between nodes %lld and %lld", cur_nodeid, next_nodeid);
 
-            auto& cur_edge = edgeitr->second;
-
             bool can_visit_edge = false;
-            if (!cur_edge.visited) 
+            if (!edges_visited[edgeitr->first])
             {
                 if (!prev_edgeway) {
                     can_visit_edge = true;
                 }
                 else {
-                    way_type prev_type = Traits::way_type(prev_edgeway);
-                    way_type cur_type = Traits::way_type(cur_edge.way);
-                    assert(prev_type != WAY_TYPE_UNKNOWN && cur_type != WAY_TYPE_UNKNOWN);
+                    way_type prev_etype = Traits::way_type(prev_edgeway);
+                    way_type cur_etype = Traits::way_type(edgeitr->second.way);
+                    assert(prev_etype != WAY_TYPE_UNKNOWN && cur_etype != WAY_TYPE_UNKNOWN);
 
-                    can_visit_edge = (prev_type == cur_type);
+                    can_visit_edge = (prev_etype == cur_etype);
                 }
             }
+            // type does not match or already visited
             if (!can_visit_edge) {
                 break;
             }
 
             path_nodes.push_back({
-                .id = next_nodeitr->first,
-                .vert = next_nodeitr->second.vert,
-                .in_way = cur_edge.way
+                .osm_node = {
+                    .id = next_nodeitr->first,
+                    .vert = next_nodeitr->second.vert,
+                },
+                .in_way = edgeitr->second.way
             });
 
-            cur_edge.visited = true;
-            prev_edgeway = cur_edge.way;
+            edges_visited[edgeitr->first] = true;
+            prev_edgeway = edgeitr->second.way;
+
+            // stop at intersections
+            if (next_nodeitr->second.adj_node_ids.size() > 2) {
+                break;
+            }
 
             auto& next_node_adj_ids = next_nodeitr->second.adj_node_ids;
             assert_msg(next_node_adj_ids.size() != 0,
                 "Adjacent node %lld has no adjacent nodes?", next_nodeid);
 
-            if (next_node_adj_ids.size() > 2) {
-                break; // stop at intersections
-            }
-
-            osmium::object_id_type next_next_nodeid = -1; // out of bounds id
+            osmium::object_id_type next_next_nodeid = -1;
             if (next_node_adj_ids.size() == 2) 
             {
-                next_next_nodeid = *std::find_if(
-                    next_node_adj_ids.begin(), next_node_adj_ids.end(), 
-                    [&](auto id) { return id != cur_nodeid; });
+                auto& c = next_node_adj_ids;
+                next_next_nodeid = *std::find_if(c.begin(), c.end(), [&](auto id) { 
+                    return id != cur_nodeid; 
+                });
             }
 
             cur_nodeid = next_nodeid;
@@ -197,6 +207,10 @@ struct way_network
         };
         return true;
     }
+
+public:
+    nodes_t nodes;
+    edges_t edges;
 };
 
 #endif
