@@ -16,13 +16,12 @@
 #include <optional>
 #include <initializer_list>
 #include <type_traits>
-
 #include <SDL.h>
+
 
 #define CONCAT(x, y) x##y
 #define STR(a) #a
 #define XSTR(a) STR(a)
-
 #define NS_PER_MS 1000000
 
 // Bogus warnings
@@ -75,17 +74,15 @@ namespace tim = std::chrono;
 using clk = tim::steady_clock;
 using uint = unsigned int;
 
+// Defer static_asserts until instantiation time
+template <typename...>
+struct deferred_false : std::false_type {};
+
 template <typename T>
 struct size
 {
     T width, height;
 };
-
-// Defer static_asserts until instantiation time
-template <typename...>
-struct deferred_false : std::false_type {};
-
-
 
 using file_ptr = std::unique_ptr<std::FILE, int(*)(std::FILE*)>;
 
@@ -96,7 +93,6 @@ using file_ptr = std::unique_ptr<std::FILE, int(*)(std::FILE*)>;
 #else
 #define SAFE_FOPEN(fname, mode) SAFE_FOPENA(fname, mode)
 #endif
-
 
 enum log_type
 {
@@ -183,15 +179,6 @@ inline bool get_bit(T word, int bit)
     return (word & (0x1 << bit)) != 0;
 }
 
-constexpr SDL_Point sdl_ptadd(SDL_Point a, SDL_Point b)
-{
-    return { a.x + b.x, a.y + b.y };
-}
-constexpr SDL_Point sdl_ptsub(SDL_Point a, SDL_Point b)
-{
-    return { a.x - b.x, a.y - b.y };
-}
-
 constexpr float wrap_angle(float angle)
 {
     if (angle >= 360.f) {
@@ -246,7 +233,6 @@ static bool parse_num_if_exists(const char* str, T& val)
     return str && parse_num(str, val);
 }
 
-// sorta replacement for C++26 operator+(string, string_view) 
 inline std::string concat_sv(
     std::initializer_list<std::string_view> list)
 {
@@ -355,17 +341,22 @@ private:
     bool m_ok;
 };
 
+template <class CastAs, class R, class P>
+inline auto dur_count(const tim::duration<R, P>& time) {
+    return tim::duration_cast<CastAs>(time).count();
+}
+
 template <class R, class P>
-inline std::string time_str(const tim::duration<R, P>& time)
+inline std::string clock_dur_str(const tim::duration<R, P>& dur)
 {
-    if (time > tim::seconds(1)) {
-        return std::to_string(tim::duration_cast<tim::seconds>(time).count()) + "s";
-    } else if (time > tim::milliseconds(1)) {
-        return std::to_string(tim::duration_cast<tim::milliseconds>(time).count()) + "ms";
-    } else if (time > tim::microseconds(1)) {
-        return std::to_string(tim::duration_cast<tim::microseconds>(time).count()) + "us";
+    if (dur > tim::seconds(1)) {
+        return std::to_string(dur_count<tim::seconds>(dur)) + "s";
+    } else if (dur > tim::milliseconds(1)) {
+        return std::to_string(dur_count<tim::milliseconds>(dur)) + "ms";
+    } else if (dur > tim::microseconds(1)) {
+        return std::to_string(dur_count<tim::microseconds>(dur)) + "us";
     } else {
-        return std::to_string(tim::duration_cast<tim::nanoseconds>(time).count()) + "ns";
+        return std::to_string(dur_count<tim::nanoseconds>(dur)) + "ns";
     }
 }
 

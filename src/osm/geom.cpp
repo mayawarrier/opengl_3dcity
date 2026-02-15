@@ -26,7 +26,7 @@ static inline seg_inter_type classify_seg_inter_type(double param1, double param
 }
 
 // https://en.wikipedia.org/wiki/Line%E2%80%93line_intersection
-bool seg_intersect(const segment& seg1, const segment& seg2, seg_inter_result& out_result, double eps)
+seg_inter_result seg_intersect(const segment& seg1, const segment& seg2, double eps)
 {
     const glm::dvec2& a1 = seg1.first, &a2 = seg1.second;
     const glm::dvec2& b1 = seg2.first, &b2 = seg2.second;
@@ -39,29 +39,25 @@ bool seg_intersect(const segment& seg1, const segment& seg2, seg_inter_result& o
     {
         if (std::abs(t_numer) < eps && std::abs(u_numer) < eps) {
             // proof: equate slope and y-intercept
-            out_result.type = SEG_INTER_COINCIDENT;
-            return true;
+            return { .type = SEG_INTER_COINCIDENT };
         } else {
-            out_result.type = SEG_INTER_PARALLEL;
-            return false;
+            return { .type = SEG_INTER_PARALLEL };
         }
     }
     double t = t_numer / denom;
     double u = u_numer / denom;
     
-    out_result.type = classify_seg_inter_type(t, u);
-    out_result.point = a1 + t * (a2 - a1);
-    out_result.param_seg1 = t;
-    out_result.param_seg2 = u;
-    
-    return out_result.type == SEG_INTER_INSIDE_BOTH;
+    return {
+        .type = classify_seg_inter_type(t, u),
+        .point = a1 + t * (a2 - a1),
+        .param_seg1 = t,
+        .param_seg2 = u
+    };
 }
 
 bool seg_proper_intersect(const segment& seg1, const segment& seg2, double eps)
 {
-    seg_inter_result result;
-    seg_intersect(seg1, seg2, result, eps);
-
+    auto result = seg_intersect(seg1, seg2, eps);
     if (result.type == SEG_INTER_PARALLEL || result.type == SEG_INTER_COINCIDENT) {
         return false;
     }
@@ -84,12 +80,6 @@ seg_project_result seg_project_point(const segment& seg, glm::dvec2 point)
     };
 }
 
-glm::dvec2 seg_normal(const segment& seg, direction dir, double width)
-{
-    return (dir == DIR_LEFT ? 1 : -1) * width *
-        glm::normalize(vec_perp(seg.second - seg.first));
-}
-
 static inline double cos_angle_bw(const glm::dvec2& a, const glm::dvec2& b) {
     return glm::dot(a, b) / (glm::length(a) * glm::length(b));
 }
@@ -104,12 +94,12 @@ double angle_bw_unitvecs(const glm::dvec2& a, const glm::dvec2& b)
     return std::acos(std::clamp(glm::dot(a, b), -1.0, 1.0));
 }
 
-double min_angle_bw(const glm::dvec2& a, const glm::dvec2& b)
+double acute_angle_bw(const glm::dvec2& a, const glm::dvec2& b)
 {
     return std::acos(std::clamp(std::abs(cos_angle_bw(a, b)), 0.0, 1.0));
 }
 
-double min_angle_bw_unitvecs(const glm::dvec2& a, const glm::dvec2& b)
+double acute_angle_bw_unitvecs(const glm::dvec2& a, const glm::dvec2& b)
 {
     return std::acos(std::clamp(std::abs(glm::dot(a, b)), 0.0, 1.0));
 }
@@ -163,7 +153,7 @@ bool polygon_covered_by(polygon_cspan inner, polygon_cspan outer)
     PathsD subj_path = get_clipper_poly(inner, bbox);
 
     auto bb_center = bbox.center();
-    for (auto* paths : { &subj_path, &clip_path }) {
+    for (auto& paths : { &subj_path, &clip_path }) {
         for (auto& path : *paths) {
             for (auto& pt : path) {
                 pt.x -= bb_center.x;
@@ -291,9 +281,7 @@ static stitch_edge corner_triangulate(glm::dvec2 p0, glm::dvec2 p1, glm::dvec2 p
     glm::dvec2 inner_p2 = p2 - norm2, outer_p2 = p2 + norm2;
     glm::dvec2 outer_p1_seg1 = p1 + norm1, outer_p1_seg2 = p1 + norm2;
 
-    seg_inter_result inter_result;
-    seg_intersect({ outer_p0, outer_p1_seg1 }, { outer_p2, outer_p1_seg2 }, inter_result, eps);
-
+    auto inter_result = seg_intersect({ outer_p0, outer_p1_seg1 }, { outer_p2, outer_p1_seg2 }, eps);
     if (inter_result.type == SEG_INTER_PARALLEL || inter_result.type == SEG_INTER_COINCIDENT) {
         return degen_corner_triangulate(p0, p1, p2, stitch_edge, width, dd, eps);
     }

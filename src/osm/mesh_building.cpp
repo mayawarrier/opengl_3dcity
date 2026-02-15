@@ -278,7 +278,7 @@ bool mesh_builder::gen_building_drawdata(std::vector<draw_datad>& drawdata, aabb
     constexpr int NUM_STEPS = 3;
 
     auto step_done = [&](const char* msg, clk::duration dur) {
-        logMESSAGE("  [%d/%d] %s: %s", CUR_STEP, NUM_STEPS, msg, time_str(dur).c_str());
+        logMESSAGE("  [%d/%d] %s: %s", CUR_STEP, NUM_STEPS, msg, clock_dur_str(dur).c_str());
         CUR_STEP++;
     };
 
@@ -417,7 +417,7 @@ bool mesh_builder::gen_building_drawdata(std::vector<draw_datad>& drawdata, aabb
 
     auto tend = clk::now();
     logMESSAGE("Generated %u tris and %u vertices in %s",
-        num_tris, num_verts, time_str(tend - tbegin).c_str());
+        num_tris, num_verts, clock_dur_str(tend - tbegin).c_str());
 
     return true;
 }

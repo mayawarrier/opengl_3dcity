@@ -69,7 +69,7 @@ struct seg_inter_result
 };
 
 // Intersect two line segments.
-bool seg_intersect(const segment& seg1, const segment& seg2, seg_inter_result &out_result, double eps = 1e-9);
+seg_inter_result seg_intersect(const segment& seg1, const segment& seg2, double eps = 1e-9);
 
 // Check for proper intersection of line segments 
 // (i.e. not parallel/coinciding, and not at endpoints).
@@ -93,10 +93,6 @@ inline glm::dvec2 seg_at_param(const segment& seg, double t) {
     return seg.first + t * (seg.second - seg.first);
 }
 
-// Get a normal vector to a segment.
-// dir_left = 90 degree CCW, dir_right = 90 degree CW.
-glm::dvec2 seg_normal(const segment& seg, direction dir, double width);
-
 // Get unoriented angle between two vectors (in radians).
 // Returns value in [0, pi].
 double angle_bw(const glm::dvec2& a, const glm::dvec2& b);
@@ -107,22 +103,13 @@ double angle_bw_unitvecs(const glm::dvec2& a, const glm::dvec2& b);
 
 // Get minimum unoriented angle between two vectors (in radians).
 // Returns value in [0, pi/2].
-double min_angle_bw(const glm::dvec2& a, const glm::dvec2& b);
+double acute_angle_bw(const glm::dvec2& a, const glm::dvec2& b);
 
 // Get minimum unoriented angle between two normalized vectors (in radians).
 // Returns value in [0, pi/2].
-double min_angle_bw_unitvecs(const glm::dvec2& a, const glm::dvec2& b);
+double acute_angle_bw_unitvecs(const glm::dvec2& a, const glm::dvec2& b);
 
-// Get minimum angle between two segments (in radians).
-// Returns value in [0, pi/2].
-inline double min_angle_bw_segs(const segment& seg1, const segment& seg2)
-{
-    glm::dvec2 dir1 = seg1.second - seg1.first;
-    glm::dvec2 dir2 = seg2.second - seg2.first;
-    return min_angle_bw(dir1, dir2);
-}
-
-// Rotate a 2D vector by angle (radians CCW).
+// Rotate a 2D vector by angle (radians +ve CCW).
 glm::dvec2 rotate_vec2(const glm::dvec2& vec, double angle);
 
 inline orient_t orient_type(double value)
