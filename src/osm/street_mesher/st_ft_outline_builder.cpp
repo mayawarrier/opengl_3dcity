@@ -1,157 +1,9 @@
-#include <algorithm>
-#include <utility>
-#include <span>
-#include <array>
-#include <unordered_map>
-#include <iterator>
 
-#include <osmium/osm/node_ref_list.hpp>
-#include <osmium/osm/way.hpp>
-#include <osmium/geom/coordinates.hpp>
-#include <osmium/geom/mercator_projection.hpp>
+#include "common.hpp"
+#include "../containers/way_network.hpp"
+#include "../containers/aabb_tree.hpp"
 
-#include <boost/unordered/unordered_flat_map.hpp>
-#include <boost/container/flat_set.hpp>
-
-#include "containers/way_network.hpp"
-#include "containers/aabb_tree.hpp"
-#include "geom.hpp"
-#include "mesh.hpp"
-
-
-bool mesh_builder::add_highway(const highway_info& info)
-{
-    auto& in_nodes = info.way->nodes();
-    std::vector<osm_node> nodes(in_nodes.size());
-
-    for (size_t i = 0; i < in_nodes.size(); ++i)
-    {
-        auto& nr = in_nodes[i];
-        auto proj = osmium::geom::MercatorProjection{}(nr.location());
-        nodes[i] = { nr.ref(), glm::dvec2(proj.x, proj.y) };
-    }
-    m_num_highway_nodes += nodes.size();
-
-    const char* name = info.way->tags()["name"];
-    m_highways.push_back({
-        .id = info.way->id(),
-        .name = name ? name : "",
-        .type = info.type,
-        .layer = info.layer,
-        .nodes = std::move(nodes),
-        .width = info.width,
-    });
-
-    return true;
-}
-
-using way_net = way_network<mesh_builder::highway>;
-
-static inline int path_num_segs(const way_net::path* path) {
-    return int(path->nodes.size()) - 1;
-}
-
-static inline segment path_seg(const way_net::path* path, int idx) {
-    return { path->nodes[idx].vert(), path->nodes[idx + 1].vert() };
-}
-
-static inline double path_seg_width(const way_net::path* path, int idx) {
-    // +1 because in_way is null for the first node
-    return path->nodes[idx + 1].in_way->width;
-}
-
-static inline glm::dvec2 path_point(const way_net::path* path, int seg_idx, double seg_param) {
-    return seg_at_param(path_seg(path, seg_idx), seg_param);
-}
-
-static bool path_has_node(const way_net::path* path, osmium::object_id_type id) {
-    auto& c = path->nodes;
-    return std::find_if(c.begin(), c.end(), [&](auto& n) { return n.id() == id; }) != c.end();
-}
-
-struct way_net_paths
-{
-    types::unord_flat_map<osmium::object_id_type, way_net::path*> path_map;
-    std::vector<way_net::path> footpaths;
-    std::vector<way_net::path> streets;
-    // add more as needed
-};
-
-static way_net_paths get_all_paths(way_net& network)
-{
-    way_net_paths ret;
-    auto add_path = [&](way_net::path&& path) 
-    {
-        if (path.type == WAY_TYPE_FOOTWAY) {
-            ret.footpaths.push_back(std::move(path));
-        }
-        else if (path.type == WAY_TYPE_STREET) {
-            ret.streets.push_back(std::move(path));
-        }
-        else { assert_msg(false, "Unhandled path type %d", path.type); }
-    };
-
-    way_net::edge_map_t<bool> visited_edges;
-
-    // traverse outwards from _all_ nodes instead of just intersections to ensure
-    // that disconnected components (for eg. racetracks) are not missed
-    for (auto nodeitr = network.nodes.begin(); nodeitr != network.nodes.end(); ++nodeitr)
-    {
-        auto& adj_node_ids = nodeitr->second.adj_node_ids;
-        if (adj_node_ids.size() == 2)
-        {
-            int index = 0;
-            bool collected[2] = { false, false };
-            way_net::path paths[2];
-
-            for (auto adj_nodeid : adj_node_ids) {
-                collected[index] = network.path_to_intersection(nodeitr, adj_nodeid, visited_edges, paths[index]);
-                index++;
-            }
-            // node is in the middle of a path, merge both sides
-            if (collected[0] && collected[1] && paths[0].type == paths[1].type)
-            {
-                auto& path0_nodes = paths[0].nodes;
-                auto& path1_nodes = paths[1].nodes;
-
-                std::reverse(path0_nodes.begin(), path0_nodes.end());
-
-                for (size_t i = 1; i < path0_nodes.size(); ++i) {
-                    path0_nodes[i].in_way = path0_nodes[i - 1].in_way;
-                }
-                path0_nodes[0].in_way = nullptr;
-                path1_nodes[0].in_way = path0_nodes.back().in_way;
-                path0_nodes.pop_back();
-
-                for (const auto& node : path1_nodes) {
-                    path0_nodes.push_back(node);
-                }
-
-                add_path(std::move(paths[0]));
-            }
-            else {
-                if (collected[0]) { add_path(std::move(paths[0])); }
-                if (collected[1]) { add_path(std::move(paths[1])); }
-            }
-        }
-        else {
-            for (auto adj_nodeid : adj_node_ids) {
-                way_net::path path;
-                if (network.path_to_intersection(nodeitr, adj_nodeid, visited_edges, path)) {
-                    add_path(std::move(path));
-                }
-            }
-        }
-    }
-
-    for (auto* pvec : { &ret.footpaths, &ret.streets }) {
-        for (auto& path : *pvec) {
-            ret.path_map[path.nodes.front().id()] = &path;
-            ret.path_map[path.nodes.back().id()] = &path;
-        }
-    }
-    return ret;
-}
+#include "st_ft_outline_builder.hpp"
 
 // Strategy:
 // Snap the street segments to the footpaths, if they are within a certain distance and angular tolerance
@@ -162,51 +14,32 @@ static way_net_paths get_all_paths(way_net& network)
 //todo: I can start cleaning up now and reimplementing parts of the code
 // some footpaths are inside area-mapped highways, so I need to check if the footpath is inside an area and remove it, just generate the area
 // some footpaths are at different heights than the street! These should be ignored or drawn appropriately
-// some footpaths obscure other footpaths, so I need to check if the footpath is obscured by a building or another footpath
+// some footpaths are obscured by buildings
 
 class st_outline_builder
 {
 public:
-    struct outline_node
-    {
-        // -1 if point is generated and not an OSM node.
-        osmium::object_id_type id;
-        glm::dvec2 vert;
-
-        static outline_node osm(const osm_node& n) {
-            return { .id = n.id, .vert = n.vert };
-        }
-    };
-
-    using street_outlines_t = types::unord_flat_map<const way_net::path*, std::vector<outline_node>>;
-
-    st_outline_builder(
-        const way_net& network,
-        const way_net_paths& all_paths, 
-        const aabb_tree2d<mesh_builder::building*>& bldg_tree, 
-        std::function<void(const char*, clk::duration)> step_done_func) :
+    st_outline_builder(const way_net& network, const way_net_paths& all_paths,
+        const aabb_tree2d<mesh_builder::building*>& bldg_tree) :
         m_network(network),
         m_all_paths(all_paths), 
-        m_bldg_tree(bldg_tree), 
-        m_step_done(std::move(step_done_func))
+        m_bldg_tree(bldg_tree)
     {
-        auto tbegin_prep = clk::now();
+        timeit("Outline extraction prep", [&]()
+        {
+            auto ftseg_bnds = add_path_segments(all_paths.footpaths, m_all_segs);
+            auto stseg_bnds = add_path_segments(all_paths.streets, m_all_segs);
 
-        auto ftseg_bnds = add_path_segments(all_paths.footpaths, m_all_segs);
-        auto stseg_bnds = add_path_segments(all_paths.streets, m_all_segs);
+            m_footpath_segs = std::span(m_all_segs).subspan(ftseg_bnds.first, ftseg_bnds.second);
+            m_street_segs = std::span(m_all_segs).subspan(stseg_bnds.first, stseg_bnds.second);
 
-        m_footpath_segs = std::span(m_all_segs).subspan(ftseg_bnds.first, ftseg_bnds.second);
-        m_street_segs = std::span(m_all_segs).subspan(stseg_bnds.first, stseg_bnds.second);
-
-        size_t tobj_idx = 0;
-        buffer<path_tseg*> tree_objects(int(m_all_segs.size()), buffer_overwrite);
-        for (auto& seg : m_all_segs) {
-            tree_objects.ptr[tobj_idx++] = &seg;
-        }
-        m_seg_tree = aabb_tree2d<path_tseg*>::create_unsafe(tree_objects.span());
-
-        auto tend_prep = clk::now(); 
-        m_step_done("Outline extraction prep", tend_prep - tbegin_prep);
+            size_t tobj_idx = 0;
+            buffer<path_tseg*> tree_objects(int(m_all_segs.size()), buffer_overwrite);
+            for (auto& seg : m_all_segs) {
+                tree_objects.ptr[tobj_idx++] = &seg;
+            }
+            m_seg_tree = aabb_tree2d<path_tseg*>::create_unsafe(tree_objects.span());
+        });
     }
 
 private:
@@ -849,33 +682,19 @@ private:
     }
 
 public:
-    street_outlines_t build_outlines(double eps, int strategy = 1)
+    street_outlines_t build_outlines(double eps)
     {
-        auto tbegin_outlines = clk::now();
-        auto fragments = get_outline_fragments(eps);
-        //if (strategy == 1) {
-        //    entries = get_all_st_ft_outlines(eps);
-        //} else if (strategy == 2) {
-        //    entries = get_all_st_ft_outlines_v2(eps);
-        //} else {
-        //    // default to v1
-        //    entries = get_all_st_ft_outlines(eps);
-        //}
-        auto tend_outlines = clk::now();
+        st_outline_frags_t fragments;
+        timeit("Outline extraction", [&]() {
+            fragments = get_outline_fragments(eps);
+        });
 
-        m_step_done("Outline extraction", tend_outlines - tbegin_outlines);
-
-        auto tbegin_holefill = clk::now();
-        auto ret = join_outline_fragments(fragments, eps);
-        auto tend_holefill = clk::now();
-
-        m_step_done("Outline hole filling", tend_holefill - tbegin_holefill);
+        street_outlines_t ret;
+        timeit("Outline joining", [&]() {
+            ret = join_outline_fragments(fragments, eps);
+        });
 
         return ret;
-    }
-
-    static constexpr int num_steps() {
-        return 3;
     }
 
 private:
@@ -886,152 +705,12 @@ private:
     std::span<path_tseg> m_street_segs;
     types::unord_flat_map<const way_net::path*, int> m_path_segs_startgidx;
     aabb_tree2d<path_tseg*> m_seg_tree;
-    const aabb_tree2d<mesh_builder::building*>& m_bldg_tree;
-    std::function<void(const char*, clk::duration)> m_step_done;
+    const aabb_bldg_tree& m_bldg_tree;
 };
 
-
-static void gen_path_drawdata(draw_datad& dd, const way_net::path& path, double eps)
+street_outlines_t build_st_ft_outlines(const way_net& network,
+    const way_net_paths& all_paths, const aabb_bldg_tree& bldg_tree, double eps)
 {
-    std::vector<glm::dvec2> verts(path.nodes.size());
-    for (size_t i = 0; i < path.nodes.size(); ++i) {
-        verts[i] = path.nodes[i].vert();
-    }
-    // todo: use each way's width when triangulating the polyline
-    polyline_triangulate(verts, path.nodes[1].in_way->width, dd, eps);
-}
-
-static bool gen_outline_drawdata(draw_datad& dd, const std::vector<st_outline_builder::outline_node>& outline)
-{
-    std::vector<glm::dvec2> outline_verts(outline.size());
-    for (size_t i = 0; i < outline.size(); ++i) {
-        outline_verts[i] = outline[i].vert;
-    }
-    if (path_orient(outline_verts) == ORIENT_CW) {
-        std::reverse(outline_verts.begin(), outline_verts.end());
-    }
-    
-    auto vert_span = std::span<const glm::dvec2>(outline_verts);
-    auto tri_indices = polygon_triangulate(std::span(&vert_span, 1));
-    if (tri_indices.empty()) {
-        logDEBUG(LOG_MESSAGE, "Skipping outline since it has no triangles");
-        return false;
-    }
-    assert(check_triangles_oriented(outline_verts, tri_indices));
-
-    uint32_t vert_startidx = dd.num_verts();
-    for (const auto& point : outline_verts) {
-        dd.add_vertex(point.x, point.y, 0.0);
-    }
-    for (size_t i = 0; i < tri_indices.size(); i += 3) {
-        dd.add_triangle_w_offset(tri_indices[i], tri_indices[i + 1], tri_indices[i + 2], vert_startidx);
-    }
-
-    return true;
-}
-
-bool mesh_builder::gen_street_drawdata(std::vector<draw_datad>& drawdata, const aabb_tree2d<building*>* bldg_tree_ptr)
-{
-    constexpr double eps = 1e-9;
-
-    int CUR_STEP = 1;
-    constexpr int NUM_STEPS = 4 + st_outline_builder::num_steps();
-
-    auto step_done = [&](const char* msg, clk::duration dur) {
-        logMESSAGE("  [%d/%d] %s: %s", CUR_STEP, NUM_STEPS, msg, clock_dur_str(dur).c_str());
-        CUR_STEP++;
-    };
-    
-    logMESSAGE("-----------------------------------------------");
-    logMESSAGE("Generating streets...");
-    logMESSAGE("%zu ways, %zu nodes", m_highways.size(), m_num_highway_nodes);
-    
-    auto tbegin = clk::now();
-
-    auto tbegin_net = clk::now();
-    way_net network;
-    {
-        for (const auto& way : m_highways)
-        {
-            for (size_t i = 0; i < way.nodes.size(); ++i)
-            {
-                auto* prev_waynode = (i == 0) ? nullptr : &way.nodes[i - 1];
-                auto* cur_waynode = &way.nodes[i];
-                auto* next_waynode = (i == way.nodes.size() - 1) ? nullptr : &way.nodes[i + 1];
-
-                auto nodeitr = network.get_or_add_node(cur_waynode->id, cur_waynode->vert);
-
-                auto& adj_node_ids = nodeitr->second.adj_node_ids;
-                if (prev_waynode) {
-                    adj_node_ids.insert(prev_waynode->id);
-                }
-                if (next_waynode) {
-                    adj_node_ids.insert(next_waynode->id);
-                    network.add_edge({ nodeitr->first, next_waynode->id }, &way);
-                }
-            }
-        }
-    }
-    step_done("Street network", clk::now() - tbegin_net);
-    
-    auto tbegin_paths_ex = clk::now();
-    way_net_paths all_paths;
-    {
-        all_paths = get_all_paths(network);
-    }
-    step_done("Path extraction", clk::now() - tbegin_paths_ex);
-
-    st_outline_builder st_builder(network, all_paths, *bldg_tree_ptr, step_done);
-    auto st_outline_map = st_builder.build_outlines(eps, 1);
-    //auto st_outline_map = st_outline_builder::street_outlines_t{};
-
-    draw_datad footpath_dd { 
-        .name = "footpaths", 
-        .color = glm::vec4(0.5f, 0.5f, 0.5f, 1.0f) 
-    };
-    draw_datad street_dd { 
-        .name = "streets", 
-        .color = glm::vec4(0.25f, 0.25f, 0.25f, 1.0f) 
-    };
-    //draw_datad debug_dd { 
-    //    .name = "debug", 
-    //    .color = glm::vec4(1.0f, 0.f, 0.f, 1.f) 
-    //};
-
-    auto tbegin_outlines = clk::now();
-    {
-        for (auto& [street, outline] : st_outline_map) {
-            if (!gen_outline_drawdata(street_dd, outline)) {
-                gen_path_drawdata(street_dd, *street, eps);
-            }
-        }
-    }
-    step_done("Outline triangulation", clk::now() - tbegin_outlines);
-
-    auto tbegin_paths = clk::now();
-    {
-        for (const auto& footpath : all_paths.footpaths) {
-            gen_path_drawdata(footpath_dd, footpath, eps);
-        }
-        for (const auto& street : all_paths.streets) {
-            if (!st_outline_map.contains(&street)) {
-                gen_path_drawdata(street_dd, street, eps);
-            }
-        }
-    }
-    step_done("Path triangulation", clk::now() - tbegin_paths);
-
-    uint32_t num_tris = street_dd.num_tris() + footpath_dd.num_tris();
-    uint32_t num_verts = street_dd.num_verts() + footpath_dd.num_verts();
-
-    drawdata.push_back(std::move(footpath_dd));
-    drawdata.push_back(std::move(street_dd));
-    //drawdata.push_back(std::move(debug_dd));
-
-    auto tend = clk::now();
-
-    logMESSAGE("Generated %u tris and %u vertices in %s", 
-        num_tris, num_verts, clock_dur_str(tend - tbegin).c_str());
-
-    return true;
+    st_outline_builder builder(network, all_paths, bldg_tree);
+    return builder.build_outlines(eps);
 }

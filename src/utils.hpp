@@ -360,4 +360,12 @@ inline std::string clock_dur_str(const tim::duration<R, P>& dur)
     }
 }
 
+inline void timeit(const char* msg, auto&& func)
+{
+    auto tbegin = clk::now();
+    func();
+    auto tend = clk::now();
+    logMESSAGE("------ %s: %s", msg, clock_dur_str(tend - tbegin).c_str());
+}
+
 #endif

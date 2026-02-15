@@ -274,14 +274,6 @@ bool mesh_builder::get_building_part_mesh(draw_datad& mesh, const building_part&
 
 bool mesh_builder::gen_building_drawdata(std::vector<draw_datad>& drawdata, aabb_tree2d<building*>* bldg_tree_ptr)
 {
-    int CUR_STEP = 1;
-    constexpr int NUM_STEPS = 3;
-
-    auto step_done = [&](const char* msg, clk::duration dur) {
-        logMESSAGE("  [%d/%d] %s: %s", CUR_STEP, NUM_STEPS, msg, clock_dur_str(dur).c_str());
-        CUR_STEP++;
-    };
-
     size_t num_verts = 0, num_tris = 0;
     auto add_drawdata = [&](draw_datad&& dd) {
         num_verts += dd.num_verts();
@@ -297,20 +289,19 @@ bool mesh_builder::gen_building_drawdata(std::vector<draw_datad>& drawdata, aabb
     auto tbegin = clk::now();
 
     // Build AABB tree for fast intersection queries
-    auto tbegin_tree = clk::now();
     auto& bldg_tree = *bldg_tree_ptr;
+    timeit("Building AABB tree", [&]()
     {
         buffer<building*> tree_objects(m_buildings.size(), buffer_overwrite);
         for (size_t i = 0; i < m_buildings.size(); ++i) {
             tree_objects.ptr[i] = &m_buildings[i];
         }
         bldg_tree = aabb_tree2d<building*>::create_unsafe(tree_objects.span());
-    }
-    step_done("Building AABB tree", clk::now() - tbegin_tree);
+    });
 
     // Map parts/areas to buildings
-    auto tbegin_map = clk::now();
-    std::vector<building_part*> unmapped_parts;
+    std::vector<building_part*> unmapped_parts;  
+    timeit("Mapping parts to buildings", [&]()
     {
         for (auto& part : m_building_parts)
         {
@@ -365,13 +356,12 @@ bool mesh_builder::gen_building_drawdata(std::vector<draw_datad>& drawdata, aabb
             logWARNING("%zu/%zu part(s) could not be mapped to a building", 
                 unmapped_parts.size(), m_building_parts.size());
         }
-    }
-    step_done("Mapping parts to buildings", clk::now() - tbegin_map);
+    });
 
     const glm::vec4 building_color(0.85f, 0.75f, 0.65f, 1.0f);
 
     // Build meshes from the parts
-    auto tbegin_mesh = clk::now();
+    timeit("Building meshes", [&]()
     {
         for (auto& building : m_buildings)
         {
@@ -412,8 +402,7 @@ bool mesh_builder::gen_building_drawdata(std::vector<draw_datad>& drawdata, aabb
                 add_drawdata(std::move(dd));
             }
         }
-    }
-    step_done("Building meshes", clk::now() - tbegin_mesh);
+    });
 
     auto tend = clk::now();
     logMESSAGE("Generated %u tris and %u vertices in %s",
