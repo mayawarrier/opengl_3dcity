@@ -10,21 +10,16 @@
 #include <glm/glm.hpp>
 
 #ifdef NDEBUG
-#include <boost/unordered/unordered_flat_map_fwd.hpp>
-#include <boost/container/container_fwd.hpp>
+#include <boost/unordered/unordered_flat_map.hpp>
+#include <boost/container/small_vector.hpp>
+#include <boost/container/flat_set.hpp>
 #else
 #include <unordered_map>
 #include <set>
 #endif
 
+#include "drawdata.hpp"
 #include "../utils.hpp"
-
-
-enum object_type
-{
-    OBJ_TYPE_WAY,
-    OBJ_TYPE_AREA
-};
 
 enum way_type
 {
@@ -45,12 +40,6 @@ enum direction
     DIR_UNDEF = -1,
     DIR_LEFT = 0,
     DIR_RIGHT = 1,
-};
-
-struct osm_node
-{
-    osmium::object_id_type id;
-    glm::dvec2 vert;
 };
 
 namespace types
@@ -191,46 +180,75 @@ using bbox2d = bbox<2>;
 // 3D axis-aligned bounding box
 using bbox3d = bbox<3>; 
 
-template <typename TVert>
-struct draw_data
+
+struct osm_object 
 {
-    std::string name;
-    glm::vec4 color;
-    std::vector<TVert> verts;
-    std::vector<uint32_t> tri_indices; // GL_TRIANGLES
+    osmium::object_id_type id;
 
-    uint32_t add_vertex(TVert x, TVert y, TVert z)
-    {
-        uint32_t idx = num_verts();
-        verts.push_back(x);
-        verts.push_back(y);
-        verts.push_back(z);
-        return idx;
-    }
-
-    uint32_t add_vertex(const glm::tvec3<TVert>& vert) {
-        return add_vertex(vert.x, vert.y, vert.z);
-    }
-
-    void add_triangle(uint32_t idx0, uint32_t idx1, uint32_t idx2) {
-        tri_indices.push_back(idx0);
-        tri_indices.push_back(idx1);
-        tri_indices.push_back(idx2);
-    }
-
-    void add_triangle_w_offset(uint32_t idx0, uint32_t idx1, uint32_t idx2, uint32_t offset) {
-        add_triangle(idx0 + offset, idx1 + offset, idx2 + offset);
-    }
-
-    glm::dvec3 get_vertex(uint32_t idx) {
-        return { verts[3 * idx], verts[3 * idx + 1], verts[3 * idx + 2] };
-    }
-
-    uint32_t num_verts() const { return uint32_t(verts.size() / 3); }
-    uint32_t num_tris() const { return uint32_t(tri_indices.size() / 3); }
+    osm_object() = default;
+    osm_object(osmium::object_id_type id) : 
+        id(id) 
+    {}
 };
 
-using draw_dataf = draw_data<float>;
-using draw_datad = draw_data<double>;
+struct osm_node : osm_object
+{
+    glm::dvec2 vert;
+
+    osm_node() = default;
+    osm_node(osmium::object_id_type id, const glm::dvec2& vert) : 
+        osm_object(id), vert(vert) 
+    {}
+};
+
+struct osm_way : osm_object
+{
+    std::vector<osm_node> nodes;
+
+    osm_way() = default;
+
+    template <class NodeVec>
+    osm_way(osmium::object_id_type id, NodeVec&& nodes) : 
+        osm_object(id), nodes(std::forward<NodeVec>(nodes)) 
+    {}
+};
+
+struct osm_area : osm_object
+{
+    // most areas are not multipolygons, so optimize for this case
+    using poly_t = std::vector<std::span<const osm_node>>;
+    using multipoly_t = types::small_vector<poly_t, 1>;
+
+    std::vector<osm_node> nodes;
+    multipoly_t polys;
+
+    osm_area() = default;
+
+    template <class PolyVec>
+    osm_area(osmium::object_id_type id, PolyVec&& polys) : 
+        osm_object(id), polys(std::forward<PolyVec>(polys)) 
+    {}
+};
+
+template <class TVert>
+double vert_x(const TVert&) {
+    static_assert(deferred_false_v<TVert>, "not implemented");
+}
+template <class TVert>
+double vert_y(const TVert&) {
+    static_assert(deferred_false_v<TVert>, "not implemented");
+}
+
+template <>
+inline double vert_x(const glm::dvec2& vert) { return vert.x; }
+
+template <>
+inline double vert_y(const glm::dvec2& vert) { return vert.y; }
+
+template <>
+inline double vert_x(const osm_node& n) { return n.vert.x; }
+
+template <>
+inline double vert_y(const osm_node& n) { return n.vert.y; }
 
 #endif

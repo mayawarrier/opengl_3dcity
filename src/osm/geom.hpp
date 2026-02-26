@@ -132,7 +132,19 @@ inline orient_t orient(const glm::dvec2& a, const glm::dvec2& b, const glm::dvec
 
 // Get orientation of a path.
 // https://en.wikipedia.org/wiki/Shoelace_formula
-orient_t path_orient(std::span<const glm::dvec2> verts);
+template <class TVert>
+orient_t path_orient(std::span<TVert> verts)
+{
+    double orient = 0.0;
+    for (size_t icur = 0; icur < verts.size(); ++icur)
+    {
+        size_t inext = (icur + 1) % verts.size();
+        double term1 = vert_y(verts[icur]) + vert_y(verts[inext]);
+        double term2 = vert_x(verts[icur]) - vert_x(verts[inext]);
+        orient += term1 * term2;
+    }
+    return orient_type(orient);
+}
 
 // First span is the outer ring, subsequent spans are inner rings (if any).
 // Outer ring must be CCW, inner rings CW.

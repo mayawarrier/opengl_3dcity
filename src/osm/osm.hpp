@@ -1,7 +1,7 @@
 #ifndef OSM_HPP
 #define OSM_HPP
 
-#include "common.hpp"
+#include "drawdata.hpp"
 
 struct color_range 
 {
@@ -16,6 +16,6 @@ struct osm_data
     std::vector<color_range> color_ranges;
 };
 
-bool read_osmfile(const fs::path& path, osm_data& out_data);
+bool read_osmfile(const std::string& filepath_or_url, osm_data& out_data);
 
 #endif

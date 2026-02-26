@@ -1,35 +1,165 @@
 
-#include "common.hpp"
-#include "../mesh.hpp"
+#include <vector>
+#include <algorithm>
+#include <utility>
+#include <span>
+#include <osmium/osm/node_ref_list.hpp>
 
-#include "st_ft_outline_builder.hpp"
+#include "containers/way_network.hpp"
+#include "geom.hpp"
+#include "mesh_builder.hpp"
 
 
-bool mesh_builder::add_highway(const highway_info& info)
+// https://wiki.openstreetmap.org/wiki/Highways
+enum highway_type
 {
-    auto& in_nodes = info.way->nodes();
-    std::vector<osm_node> nodes(in_nodes.size());
+    HIGHWAY_TYPE_UNKNOWN,
+    HIGHWAY_TYPE_MOTORWAY,
+    HIGHWAY_TYPE_TRUNK,
+    HIGHWAY_TYPE_PRIMARY,
+    HIGHWAY_TYPE_SECONDARY,
+    HIGHWAY_TYPE_TERTIARY,
+    HIGHWAY_TYPE_UNCLASSIFIED,
+    HIGHWAY_TYPE_RESIDENTIAL,
+    HIGHWAY_TYPE_MOTORWAY_LINK,
+    HIGHWAY_TYPE_TRUNK_LINK,
+    HIGHWAY_TYPE_PRIMARY_LINK,
+    HIGHWAY_TYPE_SECONDARY_LINK,
+    HIGHWAY_TYPE_TERTIARY_LINK,
+    HIGHWAY_TYPE_LIVING_STREET,
+    HIGHWAY_TYPE_SERVICE,
+    HIGHWAY_TYPE_PEDESTRIAN,
+    HIGHWAY_TYPE_ROAD,
+    HIGHWAY_TYPE_FOOTWAY, // generic footway
+    HIGHWAY_TYPE_FOOTWAY_SIDEWALK, // footway=sidewalk tag
+    HIGHWAY_TYPE_FOOTWAY_CROSSING, // footway=crossing tag
+};
 
-    for (size_t i = 0; i < in_nodes.size(); ++i)
-    {
-        auto& nr = in_nodes[i];
-        auto proj = osmium::geom::MercatorProjection{}(nr.location());
-        nodes[i] = { nr.ref(), glm::dvec2(proj.x, proj.y) };
+// Type of highway based on its tags. 
+// Returns -1 if not a highway and HIGHWAY_TYPE_UNKNOWN if 
+// the highway tag is present but unrecognized.
+int get_highway_type(const osmium::Way& way)
+{
+    const char* highway = way.tags()["highway"];
+    if (!highway) {
+        return -1;
     }
-    m_num_highway_nodes += nodes.size();
+    if (std::strcmp(highway, "motorway") == 0)       return HIGHWAY_TYPE_MOTORWAY;
+    if (std::strcmp(highway, "trunk") == 0)          return HIGHWAY_TYPE_TRUNK;
+    if (std::strcmp(highway, "primary") == 0)        return HIGHWAY_TYPE_PRIMARY;
+    if (std::strcmp(highway, "secondary") == 0)      return HIGHWAY_TYPE_SECONDARY;
+    if (std::strcmp(highway, "tertiary") == 0)       return HIGHWAY_TYPE_TERTIARY;
+    if (std::strcmp(highway, "unclassified") == 0)   return HIGHWAY_TYPE_UNCLASSIFIED;
+    if (std::strcmp(highway, "residential") == 0)    return HIGHWAY_TYPE_RESIDENTIAL;
+    if (std::strcmp(highway, "motorway_link") == 0)  return HIGHWAY_TYPE_MOTORWAY_LINK;
+    if (std::strcmp(highway, "trunk_link") == 0)     return HIGHWAY_TYPE_TRUNK_LINK;
+    if (std::strcmp(highway, "primary_link") == 0)   return HIGHWAY_TYPE_PRIMARY_LINK;
+    if (std::strcmp(highway, "secondary_link") == 0) return HIGHWAY_TYPE_SECONDARY_LINK;
+    if (std::strcmp(highway, "tertiary_link") == 0)  return HIGHWAY_TYPE_TERTIARY_LINK;
+    if (std::strcmp(highway, "living_street") == 0)  return HIGHWAY_TYPE_LIVING_STREET;
+    if (std::strcmp(highway, "service") == 0)        return HIGHWAY_TYPE_SERVICE;
+    if (std::strcmp(highway, "pedestrian") == 0)     return HIGHWAY_TYPE_PEDESTRIAN;
+    if (std::strcmp(highway, "road") == 0)           return HIGHWAY_TYPE_ROAD;
 
-    const char* name = info.way->tags()["name"];
-    m_highways.push_back({
-        .id = info.way->id(),
-        .name = name ? name : "",
-        .type = info.type,
-        .layer = info.layer,
-        .nodes = std::move(nodes),
-        .width = info.width,
-    });
+    if (std::strcmp(highway, "footway") == 0)
+    {
+        const char* footway = way.tags()["footway"];
+        if (footway && std::strcmp(footway, "sidewalk") == 0) return HIGHWAY_TYPE_FOOTWAY_SIDEWALK;
+        if (footway && std::strcmp(footway, "crossing") == 0) return HIGHWAY_TYPE_FOOTWAY_CROSSING;
+        return HIGHWAY_TYPE_FOOTWAY;
+    }
 
-    return true;
+    return HIGHWAY_TYPE_UNKNOWN;
 }
+
+// Width of a highway type in meters. Uses the width tag if present.
+// Returns -1 if type is invalid or for highways with tag area=yes.
+double get_highway_width(const osmium::Way& way, highway_type type)
+{
+    if (way.tags().has_tag("area", "yes")) {
+        return -1.0;
+    }
+
+    double width;
+    switch (type)
+    {
+    case HIGHWAY_TYPE_MOTORWAY:         width = 18.0;  break;
+    case HIGHWAY_TYPE_TRUNK:            width = 18.0;  break;
+    case HIGHWAY_TYPE_PRIMARY:          width = 18.0;  break;
+    case HIGHWAY_TYPE_SECONDARY:        width = 18.0;  break;
+    case HIGHWAY_TYPE_TERTIARY:         width = 18.0;  break;
+    case HIGHWAY_TYPE_MOTORWAY_LINK:    width = 12.0;  break;
+    case HIGHWAY_TYPE_TRUNK_LINK:       width = 12.0;  break;
+    case HIGHWAY_TYPE_PRIMARY_LINK:     width = 12.0;  break;
+    case HIGHWAY_TYPE_SECONDARY_LINK:   width = 12.0;  break;
+    case HIGHWAY_TYPE_TERTIARY_LINK:    width = 12.0;  break;
+    case HIGHWAY_TYPE_UNCLASSIFIED:     width = 12.0;  break;
+    case HIGHWAY_TYPE_RESIDENTIAL:      width = 12.0;  break;
+    case HIGHWAY_TYPE_LIVING_STREET:    width = 12.0;  break;
+    case HIGHWAY_TYPE_PEDESTRIAN:       width = 12.0;  break;
+    case HIGHWAY_TYPE_SERVICE:          width = 7.0;   break;
+    case HIGHWAY_TYPE_FOOTWAY:
+    case HIGHWAY_TYPE_FOOTWAY_SIDEWALK:
+    case HIGHWAY_TYPE_FOOTWAY_CROSSING: width = 1.3;   break;
+    case HIGHWAY_TYPE_UNKNOWN:
+    case HIGHWAY_TYPE_ROAD:             width = 7.0;   break;
+    default:
+        assert(false);
+        return -1.0;
+    }
+    // roughly convert from carto's pixel-based widths
+    return width * (50.0 / 58.0);
+}
+
+using way_net = way_network<mesh_builder::highway>;
+
+static inline int path_num_segs(const way_net::path* path) {
+    return int(path->nodes.size()) - 1;
+}
+
+static inline segment path_seg(const way_net::path* path, int idx) {
+    return { path->nodes[idx].vert(), path->nodes[idx + 1].vert() };
+}
+
+static inline double path_seg_width(const way_net::path* path, int idx) {
+    // +1 because in_way is null for the first node
+    return path->nodes[idx + 1].in_way->width;
+}
+
+static inline glm::dvec2 path_point(const way_net::path* path, int seg_idx, double seg_param) {
+    return seg_at_param(path_seg(path, seg_idx), seg_param);
+}
+
+static inline bool path_has_node(const way_net::path* path, osmium::object_id_type id) {
+    auto& c = path->nodes;
+    return std::find_if(c.begin(), c.end(), [&](auto& n) { return n.id() == id; }) != c.end();
+}
+
+bool mesh_builder::add_street_comp(const osmium::OSMObject* obj, mesh_object::comp_vec_t& comps)
+{
+    if (obj->type() == osmium::item_type::way)
+    {
+        auto* way = static_cast<const osmium::Way*>(obj);
+        int type = get_highway_type(*way);
+        if (type != -1) {
+            comps.push_back({
+                .type = mesh_component::COMP_TYPE_HIGHWAY,
+                .subtype = type,
+            });
+            return true;
+        }
+    }
+    // todo: handle areas
+    return false;
+}
+
+struct way_net_paths
+{
+    types::unord_flat_map<osmium::object_id_type, way_net::path*> path_map;
+    std::vector<way_net::path> footpaths;
+    std::vector<way_net::path> streets;
+    // add more as needed
+};
 
 static way_net_paths get_all_paths(way_net& network)
 {
@@ -186,7 +316,8 @@ bool mesh_builder::gen_street_drawdata(std::vector<draw_datad>& drawdata, const 
         all_paths = get_all_paths(network);
     });
 
-    auto st_outline_map = build_st_ft_outlines(network, all_paths, *bldg_tree_ptr, eps);
+    //auto st_outline_map = build_st_ft_outlines(network, all_paths, *bldg_tree_ptr, eps);
+    street_outlines_t st_outline_map{};
 
     draw_datad footpath_dd { 
         .name = "footpaths", 
@@ -212,9 +343,9 @@ bool mesh_builder::gen_street_drawdata(std::vector<draw_datad>& drawdata, const 
 
     timeit("Path triangulation", [&]()
     {
-        for (const auto& footpath : all_paths.footpaths) {
-            gen_path_drawdata(footpath_dd, footpath, eps);
-        }
+        //for (const auto& footpath : all_paths.footpaths) {
+        //    gen_path_drawdata(footpath_dd, footpath, eps);
+        //}
         for (const auto& street : all_paths.streets) {
             if (!st_outline_map.contains(&street)) {
                 gen_path_drawdata(street_dd, street, eps);

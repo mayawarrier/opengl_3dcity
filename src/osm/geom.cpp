@@ -114,20 +114,6 @@ glm::dvec2 rotate_vec2(const glm::dvec2& vec, double angle)
     };
 }
 
-// https://en.wikipedia.org/wiki/Shoelace_formula
-orient_t path_orient(std::span<const glm::dvec2> verts)
-{
-    double orient = 0.0;
-    for (size_t icur = 0; icur < verts.size(); ++icur)
-    {
-        size_t inext = (icur + 1) % verts.size();
-        double term1 = verts[icur].y + verts[inext].y;
-        double term2 = verts[icur].x - verts[inext].x;
-        orient += term1 * term2;
-    }
-    return orient_type(orient);
-}
-
 static Clipper2Lib::PathsD get_clipper_poly(polygon_cspan in_poly, bbox2d& bbox)
 {
     using namespace Clipper2Lib;

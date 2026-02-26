@@ -78,6 +78,9 @@ using uint = unsigned int;
 template <typename...>
 struct deferred_false : std::false_type {};
 
+template <typename... Ts>
+constexpr bool deferred_false_v = deferred_false<Ts...>::value;
+
 template <typename T>
 struct size
 {
@@ -224,13 +227,6 @@ bool parse_num(std::string_view str, T& val)
 
     auto res = std::from_chars(beg, end, val);
     return res.ec == std::errc();
-}
-
-// Parse number with null check.
-template <typename T>
-static bool parse_num_if_exists(const char* str, T& val)
-{
-    return str && parse_num(str, val);
 }
 
 inline std::string concat_sv(

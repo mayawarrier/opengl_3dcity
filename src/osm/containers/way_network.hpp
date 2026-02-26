@@ -32,7 +32,7 @@ public:
         // Edge duplication is possible if two ways share segments, so use a set.
         // Two edges can also have the same way if a way loops back to 
         // its starting node.
-        types::flat_set<osmium::object_id_type> adj_node_ids;
+        types::small_flat_set<osmium::object_id_type, 4> adj_node_ids;
     };
 
     struct edge {

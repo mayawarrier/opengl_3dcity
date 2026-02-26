@@ -8,8 +8,20 @@
 
 #include "containers/aabb_tree.hpp"
 #include "geom.hpp"
-#include "mesh.hpp"
+#include "mesh_builder.hpp"
 
+
+// https://wiki.openstreetmap.org/wiki/Buildings
+enum building_type
+{
+    BUILDING_TYPE_YES
+};
+
+// https://wiki.openstreetmap.org/wiki/Key:building:part
+enum building_part_type
+{
+    BUILDING_PART_TYPE_YES
+};
 
 static const osmium::OSMObject* bldg_object(const mesh_builder::building_info& info)
 {
@@ -54,136 +66,34 @@ static void set_building_heights(const osmium::TagList& tags, mesh_builder::buil
     if (!part.has_ht_top) { part.ht_top = part.ht_btm + 3.0; }
 }
 
-bool mesh_builder::get_building_part(const building_info& info, building_part& out_part)
+bool mesh_builder::add_bldg_comp(const osmium::OSMObject* obj, mesh_object::comp_vec_t& comps)
 {
-    auto project_and_extend_bbox = [](const osmium::Location & loc, bbox2d & bbox) -> glm::dvec2
-    {
-        auto proj = osmium::geom::MercatorProjection{}(loc);
-        auto proj_glm = glm::dvec2(proj.x, proj.y);
-        bbox.extend(proj_glm);
-        return proj_glm;
-    };
-
-    switch (info.obj_type) 
-    {
-        case OBJ_TYPE_WAY:
-        {
-            auto& nodes = info.way->nodes();
-            if (nodes.empty() || !nodes.is_closed()) {
-                return false;
-            }
-
-            auto bbox = bbox2d::empty();
-            std::vector<glm::dvec2> verts(nodes.size() - 1);
-            for (size_t i = 0; i < nodes.size() - 1; ++i) {
-                verts[i] = project_and_extend_bbox(nodes[i].location(), bbox);
-            }
-            if (path_orient(verts) == ORIENT_CW) {
-                std::reverse(verts.begin(), verts.end());
-            }
-
-            out_part = {
-                .id = info.way->id(),
-                .verts = std::move(verts),
-                .bbox = bbox,
-                .obj_type = OBJ_TYPE_WAY
-            };
-            set_building_heights(bldg_object(info)->tags(), out_part);
-        }
-        break;
-
-        case OBJ_TYPE_AREA:
-        {
-            auto& area = *info.area;
-            if (area.outer_rings().empty()) {
-                return false;
-            }
-            
-            auto bbox = bbox2d::empty();
-            std::vector<glm::dvec2> verts;
-            std::vector<std::pair<int, int>> ring_sizes;
-
-            for (auto& outer_ring : area.outer_rings())
-            {
-                if (!outer_ring.is_closed() || outer_ring.size() < 3) {
-                    return false;
-                }
-                for (size_t i = 0; i < outer_ring.size() - 1; ++i) {
-                    auto& vert = outer_ring[i];
-                    verts.push_back(project_and_extend_bbox(vert.location(), bbox));
-                }
-                ring_sizes.push_back({ 0, int(outer_ring.size()) - 1 });
-            
-                for (auto& inner_ring : area.inner_rings(outer_ring))
-                {
-                    if (!inner_ring.is_closed() || inner_ring.size() < 3) {
-                        return false;
-                    }
-                    int startidx = int(verts.size());
-                    for (size_t i = 0; i < inner_ring.size() - 1; ++i) {
-                        auto& vert = inner_ring[i];
-                        verts.push_back(project_and_extend_bbox(vert.location(), bbox));
-                    }
-                    ring_sizes.push_back({ startidx, int(inner_ring.size()) - 1 });
-                }
-            }
-
-            decltype(area::rings) rings(ring_sizes.size());
-            for (size_t i = 0; i < ring_sizes.size(); ++i) 
-            {
-                auto [startidx, size] = ring_sizes[i];        
-                auto ring = std::span(&verts[startidx], size);
-
-                // outer ring must be CCW, inner rings CW
-                if (i == 0) {
-                    if (path_orient(ring) == ORIENT_CW) {
-                        std::reverse(ring.begin(), ring.end());
-                    }
-                }
-                else if (path_orient(ring) == ORIENT_CCW) {
-                    std::reverse(ring.begin(), ring.end());
-                }
-                rings[i] = ring;
-            }
-
-            m_bldg_areas[area.orig_id()] = { .rings = std::move(rings) };
-            
-            out_part = {
-                .id = area.orig_id(),
-                .verts = std::move(verts),
-                .bbox = bbox,
-                .obj_type = OBJ_TYPE_AREA
-            };
-            set_building_heights(bldg_object(info)->tags(), out_part);
-        }
-        break;
-
-        default: return false;
-    }
-    
-    return true;
-}
-
-bool mesh_builder::add_building(const building_info& info)
-{
-    building_part part;
-    if (!get_building_part(info, part)) {
-        logWARNING("Failed to get part for way %lld", bldg_id(info));
+    if (obj->type() != osmium::item_type::area) {
         return false;
     }
+    auto* area = static_cast<const osmium::Area*>(obj);
 
-    if (info.is_part) {
-        m_building_parts.push_back(std::move(part));
-    }
-    else {
-        const char* name = bldg_object(info)->tags()["name"];
-        m_buildings.push_back({
-            .base = std::move(part),
-            .name = name ? name : "",
-            .parts = {},
+    auto& tags = area->tags();
+    bool is_building = tags.has_key("building");
+    bool is_bldg_part = tags.has_key("building:part");
+
+    if (is_building || is_bldg_part) 
+    {
+        auto type = is_building ?
+            mesh_component::COMP_TYPE_BUILDING :
+            mesh_component::COMP_TYPE_BUILDING_PART;
+
+        auto subtype = is_building ?
+            building_type::BUILDING_TYPE_YES :
+            building_part_type::BUILDING_PART_TYPE_YES;
+        
+        comps.push_back({
+            .type = type,
+            .subtype = subtype,
         });
+        return true;
     }
-    return true;
+    return false;
 }
 
 static inline void mesh_add_triangle(draw_datad& mesh, glm::u32vec3 indices, bool reverse_winding)
