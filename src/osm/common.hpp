@@ -21,12 +21,6 @@
 #include "drawdata.hpp"
 #include "../utils.hpp"
 
-enum way_type
-{
-    WAY_TYPE_UNKNOWN,
-    WAY_TYPE_STREET,
-    WAY_TYPE_FOOTWAY
-};
 
 enum orient_t
 {
@@ -181,6 +175,13 @@ using bbox2d = bbox<2>;
 using bbox3d = bbox<3>; 
 
 
+enum osm_obj_type
+{
+    OSM_OBJ_TYPE_NODE,
+    OSM_OBJ_TYPE_WAY,
+    OSM_OBJ_TYPE_AREA
+};
+
 struct osm_object 
 {
     osmium::object_id_type id;
@@ -224,11 +225,14 @@ struct osm_area : osm_object
 
     osm_area() = default;
 
-    template <class PolyVec>
-    osm_area(osmium::object_id_type id, PolyVec&& polys) : 
-        osm_object(id), polys(std::forward<PolyVec>(polys)) 
+    template <class NodeVec, class PolyVec>
+    osm_area(osmium::object_id_type id, NodeVec&& nodes, PolyVec&& polys) : 
+        osm_object(id), 
+        nodes(std::forward<NodeVec>(nodes)), 
+        polys(std::forward<PolyVec>(polys)) 
     {}
 };
+
 
 template <class TVert>
 double vert_x(const TVert&) {
@@ -237,6 +241,11 @@ double vert_x(const TVert&) {
 template <class TVert>
 double vert_y(const TVert&) {
     static_assert(deferred_false_v<TVert>, "not implemented");
+}
+
+template <class TVert>
+glm::dvec2 vert_to_dvec2(const TVert& vert) {
+    return { vert_x(vert), vert_y(vert) };
 }
 
 template <>

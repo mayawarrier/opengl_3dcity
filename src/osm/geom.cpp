@@ -176,20 +176,6 @@ std::vector<uint32_t> polygon_triangulate(polygon_cspan polygon)
     return mapbox::earcut<uint32_t>(polygon);
 }
 
-bool check_triangles_oriented(std::span<const glm::dvec2> verts, std::span<const uint32_t> indices)
-{
-    for (size_t i = 0; i < indices.size(); i += 3)
-    {
-        auto& v0 = verts[indices[i]];
-        auto& v1 = verts[indices[i + 1]];
-        auto& v2 = verts[indices[i + 2]];
-        if (orient(v0, v1, v2) == ORIENT_CW) {
-            return false;
-        }
-    }
-    return true;
-}
-
 static void segment_triangulate(glm::dvec2 p0, glm::dvec2 p1, double width, draw_datad& dd)
 {
     glm::dvec2 norm = (width / 2.0) * glm::normalize(vec_perp(p1 - p0));

@@ -132,8 +132,7 @@ inline orient_t orient(const glm::dvec2& a, const glm::dvec2& b, const glm::dvec
 
 // Get orientation of a path.
 // https://en.wikipedia.org/wiki/Shoelace_formula
-template <class TVert>
-orient_t path_orient(std::span<TVert> verts)
+orient_t path_orient(const auto& verts)
 {
     double orient = 0.0;
     for (size_t icur = 0; icur < verts.size(); ++icur)
@@ -146,6 +145,21 @@ orient_t path_orient(std::span<TVert> verts)
     return orient_type(orient);
 }
 
+// Check if triangles are oriented CCW or collinear.
+bool check_triangles_oriented(const auto& verts, std::span<const uint32_t> indices)
+{
+    for (size_t i = 0; i < indices.size(); i += 3)
+    {
+        auto v0 = vert_to_dvec2(verts[indices[i]]);
+        auto v1 = vert_to_dvec2(verts[indices[i + 1]]);
+        auto v2 = vert_to_dvec2(verts[indices[i + 2]]);
+        if (orient(v0, v1, v2) == ORIENT_CW) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // First span is the outer ring, subsequent spans are inner rings (if any).
 // Outer ring must be CCW, inner rings CW.
 using polygon_cspan = std::span<std::span<const glm::dvec2>>;
@@ -156,9 +170,6 @@ bool polygon_covered_by(polygon_cspan inner_poly, polygon_cspan outer_poly);
 
 // Triangulate polygon.
 std::vector<uint32_t> polygon_triangulate(polygon_cspan polygon);
-
-// Check if triangles are oriented CCW or collinear.
-bool check_triangles_oriented(std::span<const glm::dvec2> verts, std::span<const uint32_t> indices);
 
 // Triangulate a thick polyline.
 void polyline_triangulate(std::span<const glm::dvec2> polyline, double width, draw_datad& dd, double eps = 1e-9);
