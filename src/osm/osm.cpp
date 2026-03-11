@@ -11,9 +11,13 @@
 #include <osmium/visitor.hpp>
 #include <osmium/geom/coordinates.hpp>
 #include <osmium/geom/mercator_projection.hpp>
+#include <osmium/dynamic_handler.hpp>
 #include <glm/glm.hpp>
 
+#include "mesh_comp_builders/streets.hpp"
+#include "mesh_comp_builders/buildings.hpp"
 #include "mesh_builder.hpp"
+
 #include "osm.hpp"
 
 
@@ -22,15 +26,18 @@
 class osm_reader
 {
 public:
-    explicit osm_reader(const std::string& filepath_or_url, mesh_builder& mesh_builder) :
-        m_manager{ mesh_builder },
-        m_file{ filepath_or_url }
+    explicit osm_reader(const std::string& filepath_or_url, osmium::area::AssemblerConfig area_assm_cfg = {}) :
+        m_file{ filepath_or_url },
+        m_area_assm_cfg(area_assm_cfg)
     {}
 
-    void read_all()
+    template <class TMeshBuilder>
+    void read_all(TMeshBuilder& mesh_builder)
     {
+        manager<TMeshBuilder> manager(*this, mesh_builder);
+
         // First pass.
-        osmium::relations::read_relations(m_file, m_manager);
+        osmium::relations::read_relations(m_file, manager);
 
         using loc_index_t = osmium::index::map::FlexMem<osmium::unsigned_object_id_type, osmium::Location>;
         using loc_handler_t = osmium::handler::NodeLocationsForWays<loc_index_t>;
@@ -41,23 +48,20 @@ public:
 
         // Second pass.
         osmium::io::Reader reader{ m_file, osmium::io::read_meta::no };
-        osmium::apply(reader, loc_handler, m_manager.handler([&](osmium::memory::Buffer&& buffer) {
-            osmium::apply(buffer, m_manager); // objects in output buffer
+        osmium::apply(reader, loc_handler, manager.handler([&](osmium::memory::Buffer&& buffer) {
+            osmium::apply(buffer, manager);
         }));
         reader.close();
     }
 
 private:
-    class manager : public osmium::relations::RelationsManager<osm_reader, true, true, false, true>
+    template <class TMeshBuilder>
+    class manager : public osmium::relations::RelationsManager<manager, true, true, false, true>
     {
     public:
-        using area_assembler = osmium::area::Assembler;
-        using area_assembler_cfg = typename area_assembler::config_type;
-
-    public:
-        manager(mesh_builder& mesh_builder, area_assembler_cfg area_assm_cfg = {}) :
+        manager(osm_reader& reader, TMeshBuilder& mesh_builder) :
             m_mesh_builder(mesh_builder),
-            m_area_assm_cfg(std::move(area_assm_cfg))
+            m_reader(reader),
         {}
 
         // First pass.
@@ -99,7 +103,7 @@ private:
                 }
             }
 
-            area_assembler assembler{ m_area_assm_cfg };
+            osmium::area::Assembler assembler{ m_reader.m_area_assm_cfg };
             assembler(relation, rel_ways, this->buffer());
         }
 
@@ -131,7 +135,7 @@ private:
                 way.ends_have_same_location() &&  // ids don't match sometimes
                 !way.tags().has_tag("area", "no")) 
             {
-                area_assembler assembler{ m_area_assm_cfg };
+                osmium::area::Assembler assembler{ m_reader.m_area_assm_cfg };
                 assembler(way, this->buffer());
             } 
             else {
@@ -140,50 +144,56 @@ private:
         }
 
     private:
-        area_assembler_cfg m_area_assm_cfg;
-        mesh_builder& m_mesh_builder;
+        TMeshBuilder& m_mesh_builder;
+        osm_reader& m_reader;
     };
 
 private:
-    manager m_manager;
     const osmium::io::File m_file;
+    osmium::area::AssemblerConfig m_area_assm_cfg;
 };
 
 
 bool read_osmfile(const std::string& filepath_or_url, osm_data& out_data)
 {
-    mesh_builder mesh_builder;
+    osm_mesh_builder<
+        bldg_comp_builder, 
+        street_comp_builder
+    > mesh_builder;
+
     try {
-        osm_reader reader(filepath_or_url, mesh_builder);
-        reader.read_all();
+        osm_reader reader(filepath_or_url);
+        reader.read_all(mesh_builder);
     }
     catch (const std::exception& e) {
         logERROR("Error reading OSM file: %s", e.what());
         return false;
     }
 
-    mesh_builder.build();
-    auto& batch = mesh_builder.draw_data();
-
-    for (size_t i = 0; i < batch.size(); ++i)
+    std::vector<draw_datad> drawdata;
+    if (mesh_builder.build(drawdata)) 
     {
-        auto& dd = batch[i];
+        for (size_t i = 0; i < drawdata.size(); ++i)
+        {
+            auto& dd = drawdata[i];
 
-        uint32_t verts_startidx = out_data.data.num_verts();
-        for (double v : dd.verts) {
-            out_data.data.verts.push_back(float(v));
-        }
-        uint32_t tri_startidx = out_data.data.num_tris();
-        for (uint tri_index : dd.tri_indices) {
-            out_data.data.tri_indices.push_back(tri_index + verts_startidx);
-        }
+            uint32_t verts_startidx = out_data.data.num_verts();
+            for (double v : dd.verts) {
+                out_data.data.verts.push_back(float(v));
+            }
+            uint32_t tri_startidx = out_data.data.num_tris();
+            for (uint tri_index : dd.tri_indices) {
+                out_data.data.tri_indices.push_back(tri_index + verts_startidx);
+            }
 
-        out_data.color_ranges.push_back({
-            tri_startidx,
-            dd.num_tris(),
-            dd.color
-        });
+            out_data.color_ranges.push_back({
+                tri_startidx,
+                dd.num_tris(),
+                dd.color
+            });
+        }
+        return true;
     }
 
-    return true;
+    return false;
 }

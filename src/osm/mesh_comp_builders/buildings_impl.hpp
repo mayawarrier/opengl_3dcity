@@ -1,14 +1,20 @@
+#ifndef OSM_MESH_BUILDINGS_IMPL_HPP
+#define OSM_MESH_BUILDINGS_IMPL_HPP
+
 #include <osmium/osm/node_ref_list.hpp>
 #include <osmium/osm/way.hpp>
 #include <osmium/osm/area.hpp>
 #include <osmium/geom/coordinates.hpp>
 #include <osmium/geom/mercator_projection.hpp>
-
 #include <boost/container/flat_set.hpp>
 
-#include "containers/aabb_tree.hpp"
 #include "geom.hpp"
 #include "mesh_builder.hpp"
+
+// so intellisense doesn't complain
+#ifndef OSM_MESH_BUILDINGS_HPP
+#include "buildings.hpp"
+#endif
 
 
 // https://wiki.openstreetmap.org/wiki/Buildings
@@ -23,50 +29,36 @@ enum building_part_type
     BUILDING_PART_TYPE_YES
 };
 
-static const osmium::OSMObject* bldg_object(const mesh_builder::building_info& info)
-{
-    switch (info.obj_type) {
-        case OBJ_TYPE_WAY:  return (const osmium::OSMObject*)info.way;
-        case OBJ_TYPE_AREA: return (const osmium::OSMObject*)info.area;
-        default: assert(false); return nullptr;
-    }
-}
-
-static const osmium::object_id_type bldg_id(const mesh_builder::building_info& info)
-{
-    switch (info.obj_type) {
-        case OBJ_TYPE_WAY:  return info.way->id();
-        case OBJ_TYPE_AREA: return info.area->orig_id();
-        default: assert(false); return -1;
-    }
-}
-
-static void set_building_heights(const osmium::TagList& tags, mesh_builder::building_part& part)
+static void set_bldg_heights(const osmium::TagList& tags, bldg_comp& comp)
 {
     int levels, min_level;
     double height, min_height;
 
-    bool has_levels =    parse_num_if_exists(tags["building:levels"], levels);
-    bool has_minlevel =  parse_num_if_exists(tags["building:min_level"], min_level);
-    bool has_height =    parse_num_if_exists(tags["height"], height);
-    bool has_minheight = parse_num_if_exists(tags["min_height"], min_height);
+    bool has_levels =    parse_num(tags["building:levels"], levels);
+    bool has_minlevel =  parse_num(tags["building:min_level"], min_level);
+    bool has_height =    parse_num(tags["height"], height);
+    bool has_minheight = parse_num(tags["min_height"], min_height);
 
-    part.ht_top = (has_height && height > 0) ? height : 
-                  (has_levels && levels > 0) ? (3.0 * levels) : 
-                  -1.0;
-    part.ht_btm = (has_minheight && min_height >= 0) ? min_height : 
-                  (has_minlevel && min_level >= 0) ? (3.0 * min_level) :
-                  -1.0;
+    comp.bldg_ht_top = (has_height && height > 0) ? height : 
+                       (has_levels && levels > 0) ? (3.0 * levels) : 
+                       -1.0;
+    comp.bldg_ht_btm = (has_minheight && min_height >= 0) ? min_height : 
+                       (has_minlevel && min_level >= 0) ? (3.0 * min_level) :
+                       -1.0;
 
-    bool valid_range = part.ht_top > part.ht_btm;
-    part.has_ht_btm = part.ht_btm >= 0.0 && valid_range;
-    part.has_ht_top = part.ht_top > 0.0 && valid_range;
+    bool valid_range = comp.bldg_ht_top > comp.bldg_ht_btm;
+    bool has_ht_btm = comp.bldg_ht_btm >= 0.0 && valid_range;
+    bool has_ht_top = comp.bldg_ht_top > 0.0 && valid_range;
 
-    if (!part.has_ht_btm) { part.ht_btm = 0.0; }
-    if (!part.has_ht_top) { part.ht_top = part.ht_btm + 3.0; }
+    if (!has_ht_btm) { comp.bldg_ht_btm = 0.0; }
+    if (!has_ht_top) { comp.bldg_ht_top = comp.bldg_ht_btm + 3.0; }
+
+    comp.roof_ht_top = -1.0; // not supported yet
 }
 
-bool mesh_builder::add_bldg_comp(const osmium::OSMObject* obj, mesh_object::comp_vec_t& comps)
+template <class ...TComps>
+bool bldg_comp_builder::add_comp(int mesh_obj_idx, const osmium::OSMObject* obj,
+    osm_mesh_comp_db<TComps...>* comp_db, osm_mesh_object::comp_info_vec_t& comp_info)
 {
     if (obj->type() != osmium::item_type::area) {
         return false;
@@ -80,16 +72,24 @@ bool mesh_builder::add_bldg_comp(const osmium::OSMObject* obj, mesh_object::comp
     if (is_building || is_bldg_part) 
     {
         auto type = is_building ?
-            mesh_component::COMP_TYPE_BUILDING :
-            mesh_component::COMP_TYPE_BUILDING_PART;
+            osm_mesh_object::comp_info::COMP_TYPE_BUILDING :
+            osm_mesh_object::comp_info::COMP_TYPE_BUILDING_PART;
 
-        auto subtype = is_building ?
+        int subtype = is_building ?
             building_type::BUILDING_TYPE_YES :
             building_part_type::BUILDING_PART_TYPE_YES;
         
-        comps.push_back({
+        auto& comps_vec = comp_db->comps_vec<bldg_comp>();
+        bldg_comp comp = {
+            .mesh_obj_idx = mesh_obj_idx,
+        };
+        set_bldg_heights(tags, comp);
+
+        comps_vec.push_back(comp);
+
+        comp_info.push_back({
             .type = type,
-            .subtype = subtype,
+            .comp_idx = int(comps_vec.size() - 1)
         });
         return true;
     }
@@ -182,7 +182,9 @@ bool mesh_builder::get_building_part_mesh(draw_datad& mesh, const building_part&
     return true;
 }
 
-bool mesh_builder::gen_building_drawdata(std::vector<draw_datad>& drawdata, aabb_tree2d<building*>* bldg_tree_ptr)
+template <class ...TComps>
+bool bldg_comp_builder::build_all(const osm_mesh_object_db* obj_db,
+    osm_mesh_comp_db<TComps...>* comp_db, std::vector<draw_datad>& out_drawdata)
 {
     size_t num_verts = 0, num_tris = 0;
     auto add_drawdata = [&](draw_datad&& dd) {
@@ -191,8 +193,6 @@ bool mesh_builder::gen_building_drawdata(std::vector<draw_datad>& drawdata, aabb
         drawdata.push_back(std::move(dd));
     };
 
-    logMESSAGE("-----------------------------------------------");
-    logMESSAGE("Generating buildings...");
     logMESSAGE("%zu buildings, %zu parts, %zu areas", 
         m_buildings.size(), m_building_parts.size(), m_bldg_areas.size());
 
@@ -320,3 +320,5 @@ bool mesh_builder::gen_building_drawdata(std::vector<draw_datad>& drawdata, aabb
 
     return true;
 }
+
+#endif
