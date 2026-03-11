@@ -18,14 +18,11 @@
 
 
 // A network/graph of OSM ways (streets, footpaths, etc.)
-template <typename TWay, typename Traits>
+template <class TWay, class Traits>
+    requires WayNetworkTraits<Traits, TWay>
 struct way_network
 {
 public:
-    static_assert(requires {
-        { Traits::way_type(std::declval<const TWay*>()) } -> std::same_as<way_type>;
-    }, "Invalid Traits type.");
-
     struct node
     {
         glm::dvec2 vert;
@@ -106,7 +103,7 @@ public:
             }
         };
         std::vector<node> nodes;
-        way_type type;
+        Traits::way_enum_type type;
     };
 
     //
@@ -151,10 +148,8 @@ public:
                     can_visit_edge = true;
                 }
                 else {
-                    way_type prev_etype = Traits::way_type(prev_edgeway);
-                    way_type cur_etype = Traits::way_type(edgeitr->second.way);
-                    assert(prev_etype != WAY_TYPE_UNKNOWN && cur_etype != WAY_TYPE_UNKNOWN);
-
+                    auto prev_etype = Traits::way_type(prev_edgeway);
+                    auto cur_etype = Traits::way_type(edgeitr->second.way);
                     can_visit_edge = (prev_etype == cur_etype);
                 }
             }

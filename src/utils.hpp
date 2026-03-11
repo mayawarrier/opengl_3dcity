@@ -74,12 +74,7 @@ namespace tim = std::chrono;
 using clk = tim::steady_clock;
 using uint = unsigned int;
 
-// Defer static_asserts until instantiation time
-template <typename...>
-struct deferred_false : std::false_type {};
 
-template <typename... Ts>
-constexpr bool deferred_false_v = deferred_false<Ts...>::value;
 
 template <typename T>
 struct size
@@ -220,6 +215,9 @@ constexpr bool is_ws(char c) {
 template <typename T>
 bool parse_num(std::string_view str, T& val)
 {
+    if (!str.data()) {
+        return false;
+    }
     const char* beg = str.data();
     const char* end = str.data() + str.length();
     // skip whitespace
@@ -363,5 +361,89 @@ inline void timeit(const char* msg, auto&& func)
     auto tend = clk::now();
     logMESSAGE("------ %s: %s", msg, clock_dur_str(tend - tbegin).c_str());
 }
+
+struct ebco_first_then_second_args_t {
+    explicit ebco_first_then_second_args_t() = default;
+};
+struct ebco_second_args_t {
+    explicit ebco_second_args_t() = default;
+};
+
+//
+// Empty base-class optimization pair. 
+// Stores two values, but if the first is an empty class, it takes no space.
+// https://en.cppreference.com/w/cpp/language/ebo.html
+//
+template <class TMaybeEmpty, class U, bool = std::is_empty_v<TMaybeEmpty> && !std::is_final_v<TMaybeEmpty>>
+class ebco_pair : private TMaybeEmpty
+{
+public:
+    template <class FirstArg, class... SecondArgs>
+    explicit ebco_pair(ebco_first_then_second_args_t, FirstArg&& f_arg, SecondArgs&&... s_args) :
+        TMaybeEmpty(std::forward<FirstArg>(f_arg)), m_value(std::forward<SecondArgs>(s_args)...)
+    {}
+
+    template <class... SecondArgs>
+    explicit ebco_pair(ebco_second_args_t, SecondArgs&&... s_args) :
+        TMaybeEmpty(), m_value(std::forward<SecondArgs>(s_args)...)
+    {}
+
+    inline TMaybeEmpty& ebco_first() noexcept { return *this; }
+    inline const TMaybeEmpty& ebco_first() const noexcept { return *this; }
+
+    inline U& ebco_second() noexcept { return m_value; }
+    inline const U& ebco_second() const noexcept { return m_value; }
+
+private:
+    U m_value;
+};
+
+template <class TMaybeEmpty, class U>
+class ebco_pair<TMaybeEmpty, U, false>
+{
+public:
+    template <class FirstArg, class... SecondArgs>
+    explicit ebco_pair(ebco_first_then_second_args_t, FirstArg&& f_arg, SecondArgs&&... s_args) :
+        m_first(std::forward<FirstArg>(f_arg)), m_value(std::forward<SecondArgs>(s_args)...)
+    {}
+
+    template <class... SecondArgs>
+    explicit ebco_pair(ebco_second_args_t, SecondArgs&&... s_args) :
+        m_first(), m_value(std::forward<SecondArgs>(s_args)...)
+    {}
+    
+    inline TMaybeEmpty& ebco_first() noexcept { return m_first; }
+    inline const TMaybeEmpty& ebco_first() const noexcept { return m_first; }
+
+    inline U& ebco_second() noexcept { return m_value; }
+    inline const U& ebco_second() const noexcept { return m_value; }
+
+private:
+    TMaybeEmpty m_first;
+    U m_value;
+};
+
+// Check if a type is an instance of a template composed
+// entirely of type parameters.
+template <class, template <class...> class>
+struct is_instance_of : std::false_type {};
+
+template <class... Args, template <class...> class U>
+struct is_instance_of<U<Args...>, U> : std::true_type {};
+
+// Check if a type is an instance of a template composed
+// entirely of non-type parameters.
+template <class, template <auto...> class>
+struct is_instance_of_nontype : std::false_type {};
+
+template <auto... Args, template <auto...> class U>
+struct is_instance_of_nontype<U<Args...>, U> : std::true_type {};
+
+// Defer static_asserts until instantiation time
+template <typename...>
+struct deferred_false : std::false_type {};
+
+template <typename... Ts>
+constexpr bool deferred_false_v = deferred_false<Ts...>::value;
 
 #endif

@@ -17,61 +17,94 @@ struct aabb_tree_qdata
     double sqdist;
 };
 
+struct aabb_tree_unsafe_ctor_t {
+    explicit aabb_tree_unsafe_ctor_t() = default;
+};
 
 // Axis-aligned bounding box tree.
 // 
 // - Static (can be built only once).
 // - Does not own the objects stored. 
 // - Object type should be a pointer or a cheap-to-copy
-//   type that points to the actual data.
-// - Calling Traits::bbox(obj) should be free (i.e. the 
-//   object should store its own bbox).
+//   POD type that points to the actual data.
+// - Calling Traits::bbox(obj) should be free
+//   (ideally the object should store its own bbox).
 //
-template <int N, typename T, typename Traits>
+template <int N, class T, class Traits>
+    requires AabbTraits<Traits, N, T>
 class aabb_tree
 {
+public:
+    using search_flags_type = typename Traits::search_flags_type;
+
 private:
     struct node 
     {
-        union udata {
+        struct internal_t
+        {
             bbox<N> bbox;
+            // it's okay if this is non-trivial, since the active
+            // member will never be switched.
+            search_flags_type flags;
+        };
+        struct leaf_t {
             T obj;
-        } data;
+        };
+        union data_t
+        {
+            internal_t internal;
+            leaf_t leaf;
+        };
+        data_t data;
         int lt_idx;
         int rt_idx;
     };
 
-    static_assert(requires {
-        { Traits::bbox(std::declval<T>()) } -> std::same_as<const bbox<N>&>;
-    }, "Invalid Traits type.");
-
 public:
     aabb_tree() : 
-        m_rootidx(-1) 
+        m_data(ebco_second_args_t{}, -1)
+    {}
+
+    // Changes the order of the source array!
+    explicit aabb_tree(aabb_tree_unsafe_ctor_t, std::span<T> objects, const Traits& traits = Traits()) :
+        aabb_tree(objects, traits)
+    {}
+
+    // Changes the order of the source array!
+    explicit aabb_tree(aabb_tree_unsafe_ctor_t, std::span<T> objects, Traits&& traits) :
+        aabb_tree(objects, std::move(traits))
+    {}
+
+    explicit aabb_tree(std::span<const T> objects, const Traits& traits = Traits()) :
+        aabb_tree(copy_objects_t{}, objects, traits)
+    {}
+
+    explicit aabb_tree(std::span<const T> objects, Traits&& traits) :
+        aabb_tree(copy_objects_t{}, objects, std::move(traits))
     {}
 
     DISABLE_COPY(aabb_tree)
     DEFAULT_MOVE(aabb_tree)
 
-    // Changes the order of the source array!
-    static aabb_tree create_unsafe(std::span<T> objects) {
-        return { objects };
-    }
-
-    std::vector<T> query_bbox_all(const bbox<N>& query_bbox) const
+    std::vector<T> query_intersecting_bboxes(
+        const bbox<N>& query_bbox, const search_flags_type& query_flags) const
     {
         std::vector<T> ret;
 
         // Good for upto 2^16 objects.
         types::small_vector<int, 16> search_nodeids;
 
-        auto check_subtree = [&](int nidx) {
-            if (has_nodeid(nidx) && query_bbox.intersects(node_bbox(m_nodes[nidx]))) {
+        auto check_subtree = [&](int nidx) 
+        {
+            if (has_nodeid(nidx) && 
+                (query_flags & node_flags(m_nodes[nidx])).any() && 
+                query_bbox.intersects(node_bbox(m_nodes[nidx]))) 
+            {
                 search_nodeids.push_back(nidx);
             }
         };
 
-        check_subtree(m_rootidx);
+        check_subtree(rootidx_ref());
 
         while (!search_nodeids.empty())
         {
@@ -83,10 +116,17 @@ public:
             check_subtree(node.rt_idx);
 
             if (is_leaf(node)) {
-                ret.push_back(node.data.obj);
+                ret.push_back(node.data.leaf.obj);
             }
         }
         return ret;
+    }
+
+    std::vector<T> query_intersecting_bboxes(const bbox<N>& query_bbox) const
+    {
+        search_flags_type all_flags;
+        all_flags.set(); // all bits 1
+        return query_intersecting_bboxes(query_bbox, all_flags);
     }
 
     //
@@ -96,7 +136,7 @@ public:
     // \param out_qdata Additional data about the intersection/object.
     //
     template <class QueryData = aabb_tree_qdata>
-    bool query_nearest(const auto& query, 
+    bool query_nearest(const auto& query, const search_flags_type& query_flags,
         const param_range& dist_range, auto obj_intersect_cb, T& out_object, QueryData& out_qdata) const
     {
         static_assert(requires {
@@ -113,14 +153,16 @@ public:
         auto check_subtree = [&](int nidx) 
         {
             double sqdist = std::numeric_limits<double>::infinity();
-            if (has_nodeid(nidx) &&
+            if (has_nodeid(nidx) && 
+                (query_flags & node_flags(m_nodes[nidx])).any() &&
                 intersects_subtree(query, node_bbox(m_nodes[nidx]), dist_range, sqdist) &&
-                sqdist < best_qdata.sqdist) {
+                sqdist < best_qdata.sqdist) 
+            {
                 search_nodeids.push_back(nidx);
             }
         };
 
-        check_subtree(m_rootidx);
+        check_subtree(rootidx_ref());
         
         while (!search_nodeids.empty())
         {
@@ -134,9 +176,9 @@ public:
             if (is_leaf(node))
             {
                 QueryData qdata{};
-                bool inter = std::invoke(obj_intersect_cb, node.data.obj, qdata);
+                bool inter = std::invoke(obj_intersect_cb, node.data.leaf.obj, qdata);
                 if (inter && qdata.sqdist < best_qdata.sqdist) {
-                    best_object = &node.data.obj;
+                    best_object = &node.data.leaf.obj;
                     best_qdata = std::move(qdata);
                 }
             }
@@ -149,8 +191,91 @@ public:
         else { return false; }
     }
 
+    template <class QueryData = aabb_tree_qdata>
+    bool query_nearest(const auto& query,
+        const param_range& dist_range, auto obj_intersect_cb, T& out_object, QueryData& out_qdata) const
+    {
+        search_flags_type all_flags;
+        all_flags.set(); // all bits 1
+        return query_nearest(query, all_flags, dist_range, obj_intersect_cb, out_object, out_qdata);
+    }
+
 private:
-    bool intersects_subtree(const ray2d& ray, 
+    struct copy_objects_t {
+        explicit copy_objects_t() = default;
+    };
+
+    template <class FwTraits>
+    aabb_tree(std::span<T> objects, FwTraits&& traits) :
+        m_data(ebco_first_then_second_args_t{}, std::forward<FwTraits>(traits), -1)
+    {
+        init(objects);
+    }
+
+    template <class FwTraits>
+    aabb_tree(copy_objects_t, std::span<const T> objects, FwTraits&& traits) :
+        m_data(ebco_first_then_second_args_t{}, std::forward<FwTraits>(traits), -1)
+    {
+        std::vector<T> copied_objects(objects.begin(), objects.end());
+        init(copied_objects);
+    }
+
+    void init(std::span<T> objects) {
+        rootidx_ref() = make_tree(objects.data(), objects.size());
+    }
+
+    int make_tree(T* objects, size_t num_objects)
+    {
+        if (num_objects == 0) {
+            return -1;
+        }
+        else if (num_objects == 1)
+        {
+            int node_idx = int(m_nodes.size());
+            auto& node = m_nodes.emplace_back();
+
+            node.data.leaf.obj = objects[0];
+            node.lt_idx = -1;
+            node.rt_idx = -1;
+            return node_idx;
+        }
+        else {
+            int node_idx = int(m_nodes.size());
+            auto& node = m_nodes.emplace_back();
+
+            auto& node_bb = node.data.internal.bbox;
+            auto& node_flags = node.data.internal.flags;
+
+            node_bb = bbox<N>::empty();
+            node_flags = search_flags_type{};
+            for (size_t i = 0; i < num_objects; ++i) {
+                node_bb.extend(traits().bbox(objects[i]));
+                node_flags |= traits().flags(objects[i]);
+            }
+
+            auto dim_sizes = node_bb.max - node_bb.min;
+            int longest_dim = vec_argmax(dim_sizes);
+
+            // Divide objects into half along longest dimension
+            std::sort(objects, objects + num_objects, [&](const T& lhs, const T& rhs) 
+            {
+                double lhs_dim = traits().bbox(lhs).center()[longest_dim];
+                double rhs_dim = traits().bbox(rhs).center()[longest_dim];
+                return lhs_dim < rhs_dim;
+            });
+            size_t lt_size = num_objects / 2; // truncates
+            size_t rt_size = num_objects - lt_size;
+
+            // Node reference is invalid after this point because subsequent
+            // make_tree() calls can cause m_nodes to reallocate, so use node_idx     
+            m_nodes[node_idx].lt_idx = make_tree(objects, lt_size);
+            m_nodes[node_idx].rt_idx = make_tree(objects + lt_size, rt_size);
+
+            return node_idx;
+        }
+    }
+
+    bool intersects_subtree(const ray<N>& ray, 
         const bbox<N>& subtree_bbox, const param_range& dist_range, double& out_sqdist) const
     {
         auto& bbox = subtree_bbox;
@@ -185,7 +310,7 @@ private:
         return true;
     }
 
-    bool intersects_subtree(const glm::dvec2& query, 
+    bool intersects_subtree(const glm::vec<N, double>& query, 
         const bbox<N>& subtree_bbox, const param_range& radius_range, double& out_sqdist) const
     {
         auto& bbox = subtree_bbox;
@@ -220,57 +345,6 @@ private:
         return true;
     }
 
-    aabb_tree(std::span<T> objects) {
-        m_rootidx = make_tree(objects.data(), objects.size());
-    }
-
-    int make_tree(T* objects, size_t num_objects)
-    {
-        if (num_objects == 0) {
-            return -1;
-        }
-        else if (num_objects == 1)
-        {
-            int node_idx = int(m_nodes.size());
-            auto& node = m_nodes.emplace_back();
-
-            node.data.obj = objects[0];
-            node.lt_idx = -1;
-            node.rt_idx = -1;
-            return node_idx;
-        }
-        else {
-            int node_idx = int(m_nodes.size());
-            auto& node = m_nodes.emplace_back();
-            auto& node_bb = node.data.bbox;
-
-            node_bb = bbox<N>::empty();
-            for (size_t i = 0; i < num_objects; ++i) {
-                node_bb.extend(Traits::bbox(objects[i]));
-            }
-
-            auto dim_sizes = node_bb.max - node_bb.min;
-            int longest_dim = vec_argmax(dim_sizes);
-
-            // Divide objects into half along longest dimension
-            std::sort(objects, objects + num_objects, [&](const T& lhs, const T& rhs) 
-            {
-                double lhs_dim = Traits::bbox(lhs).center()[longest_dim];
-                double rhs_dim = Traits::bbox(rhs).center()[longest_dim];
-                return lhs_dim < rhs_dim;
-            });
-            size_t lt_size = num_objects / 2; // truncates
-            size_t rt_size = num_objects - lt_size;
-
-            // Node reference is invalid after this point because subsequent
-            // make_tree() calls can cause m_nodes to reallocate, so use node_idx
-            m_nodes[node_idx].lt_idx = make_tree(objects, lt_size);
-            m_nodes[node_idx].rt_idx = make_tree(objects + lt_size, rt_size);
-
-            return node_idx;
-        }
-    }
-
     inline bool has_nodeid(int node_idx) const {
         return node_idx != -1;
     }
@@ -280,12 +354,23 @@ private:
     }
 
     inline const bbox<N>& node_bbox(const node& n) const {
-        return is_leaf(n) ? Traits::bbox(n.data.obj) : n.data.bbox;
+        return is_leaf(n) ? traits().bbox(n.data.leaf.obj) : n.data.internal.bbox;
     }
+
+    inline const search_flags_type& node_flags(const node& n) const {
+        return is_leaf(n) ? traits().flags(n.data.leaf.obj) : n.data.internal.flags;
+    }
+
+    inline Traits& traits() noexcept { return m_data.ebco_first(); }
+    inline const Traits& traits() const noexcept { return m_data.ebco_first(); }
+
+    // Either -1 or 0.
+    inline int& rootidx_ref() noexcept { return m_data.ebco_second(); }
+    inline const int& rootidx_ref() const noexcept { return m_data.ebco_second(); }
 
 private:
     std::vector<node> m_nodes;
-    int m_rootidx; // -1 or 0
+    ebco_pair<Traits, int> m_data;
 };
 
 #endif
