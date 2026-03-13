@@ -136,14 +136,11 @@ struct bbox
     vec_t min;
     vec_t max;
 
-    // Get a default-initialized bbox.
-    // bbox must be a POD class so it can't have a ctor.
-    static bbox empty() {
-        return {
-            .min = vec_t(std::numeric_limits<double>::infinity()),
-            .max = vec_t(-std::numeric_limits<double>::infinity())
-        };
-    }
+    // Invalid by default, must be extended.
+    bbox() : 
+        min(vec_t(std::numeric_limits<double>::infinity())), 
+        max(vec_t(-std::numeric_limits<double>::infinity())) 
+    {}
     
     void extend(const bbox& other)
     {

@@ -123,10 +123,7 @@ public:
         const TWay* prev_edgeway = nullptr;
 
         path_nodes.push_back({
-            .osm_node = {
-                .id = start_node->first,
-                .vert = start_node->second.vert
-            },
+            .osm_node = osm_node(start_node->first, start_node->second.vert),
             .in_way = nullptr
         });
 
@@ -159,10 +156,7 @@ public:
             }
 
             path_nodes.push_back({
-                .osm_node = {
-                    .id = next_nodeitr->first,
-                    .vert = next_nodeitr->second.vert,
-                },
+                .osm_node = osm_node(next_nodeitr->first, next_nodeitr->second.vert),
                 .in_way = edgeitr->second.way
             });
 

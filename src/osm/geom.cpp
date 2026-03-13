@@ -134,7 +134,7 @@ bool polygon_covered_by(polygon_cspan inner, polygon_cspan outer)
 {
     using namespace Clipper2Lib;
 
-    bbox2d bbox = bbox2d::empty();
+    bbox2d bbox;
     PathsD clip_path = get_clipper_poly(outer, bbox);
     PathsD subj_path = get_clipper_poly(inner, bbox);
 

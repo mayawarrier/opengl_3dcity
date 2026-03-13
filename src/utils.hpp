@@ -227,6 +227,15 @@ bool parse_num(std::string_view str, T& val)
     return res.ec == std::errc();
 }
 
+template <typename T>
+bool parse_num(const char* str, T& val)
+{
+    if (!str) {
+        return false;
+    }
+    return parse_num(std::string_view(str), val);
+}
+
 inline std::string concat_sv(
     std::initializer_list<std::string_view> list)
 {
@@ -359,7 +368,7 @@ inline void timeit(const char* msg, auto&& func)
     auto tbegin = clk::now();
     func();
     auto tend = clk::now();
-    logMESSAGE("------ %s: %s", msg, clock_dur_str(tend - tbegin).c_str());
+    logMESSAGE("--- %s: %s", msg, clock_dur_str(tend - tbegin).c_str());
 }
 
 struct ebco_first_then_second_args_t {

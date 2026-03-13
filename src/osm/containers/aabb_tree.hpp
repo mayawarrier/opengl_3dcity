@@ -43,8 +43,8 @@ private:
         struct internal_t
         {
             bbox<N> bbox;
-            // it's okay if this is non-trivial, since the active
-            // member will never be switched.
+            // it's okay if this has a non-trivial dtor, since
+            // the active member will never be switched.
             search_flags_type flags;
         };
         struct leaf_t {
@@ -232,28 +232,26 @@ private:
         else if (num_objects == 1)
         {
             int node_idx = int(m_nodes.size());
-            auto& node = m_nodes.emplace_back();
 
-            node.data.leaf.obj = objects[0];
-            node.lt_idx = -1;
-            node.rt_idx = -1;
+            typename node::leaf_t leaf{
+                .obj = objects[0]
+            };
+            m_nodes.push_back(node{
+                .data = { .leaf = leaf },
+                .lt_idx = -1,
+                .rt_idx = -1
+            });
             return node_idx;
         }
         else {
-            int node_idx = int(m_nodes.size());
-            auto& node = m_nodes.emplace_back();
+            typename node::internal_t data{};
 
-            auto& node_bb = node.data.internal.bbox;
-            auto& node_flags = node.data.internal.flags;
-
-            node_bb = bbox<N>::empty();
-            node_flags = search_flags_type{};
             for (size_t i = 0; i < num_objects; ++i) {
-                node_bb.extend(traits().bbox(objects[i]));
-                node_flags |= traits().flags(objects[i]);
+                data.bbox.extend(traits().bbox(objects[i]));
+                data.flags |= traits().flags(objects[i]);
             }
 
-            auto dim_sizes = node_bb.max - node_bb.min;
+            auto dim_sizes = data.bbox.max - data.bbox.min;
             int longest_dim = vec_argmax(dim_sizes);
 
             // Divide objects into half along longest dimension
@@ -265,6 +263,13 @@ private:
             });
             size_t lt_size = num_objects / 2; // truncates
             size_t rt_size = num_objects - lt_size;
+
+            int node_idx = int(m_nodes.size());
+            m_nodes.push_back(node{
+                .data = { .internal = data },
+                .lt_idx = -1,
+                .rt_idx = -1
+            });
 
             // Node reference is invalid after this point because subsequent
             // make_tree() calls can cause m_nodes to reallocate, so use node_idx     

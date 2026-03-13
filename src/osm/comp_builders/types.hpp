@@ -19,7 +19,6 @@ struct osm_mesh_object
             COMP_TYPE_STREET,
             COMP_TYPE_BUILDING,
             COMP_TYPE_BUILDING_PART,
-            COMP_TYPE_POI,
             COMP_NUM_TYPES // keep this last
         };
         etype type;
@@ -57,7 +56,7 @@ struct osm_mesh_object_db
     aabb_tree2d<osm_mesh_object*> obj_tree;
 
     template <class OsmObj>
-    OsmObj& get_osm_obj(int idx) const
+    const OsmObj& get_osm_obj(int idx) const
     {
         if constexpr (std::same_as<OsmObj, osm_node>) {
             return nodes[idx];
@@ -99,7 +98,7 @@ struct osm_mesh_comp_db
     std::tuple<std::vector<TComps>...> comps;
 
     template <class TComp>
-    std::vector<TComp>& comps_vec() const
+    std::vector<TComp>& comps_vec()
     {
         return std::get<std::vector<TComp>>(comps);
     }

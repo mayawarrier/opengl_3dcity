@@ -12,16 +12,13 @@
 #include "../geom.hpp"
 #include "../mesh_builder.hpp"
 
-// so intellisense doesn't complain
-#ifndef OSM_MESH_STREETS_HPP
-#include "streets.hpp"
-#endif
+#include "highways.hpp"
 
 
 // Type of highway based on its tags. 
 // Returns -1 if not a highway and HIGHWAY_TYPE_UNKNOWN if 
 // the highway tag is present but unrecognized.
-static int get_highway_type(const osmium::Way& way)
+int highway_comp_builder::get_highway_type(const osmium::Way& way)
 {
     const char* highway = way.tags()["highway"];
     if (!highway) {
@@ -57,7 +54,7 @@ static int get_highway_type(const osmium::Way& way)
 
 // Width of a highway type in meters. Uses the width tag if present.
 // Returns -1 if type is invalid or for highways with tag area=yes.
-static double get_highway_width(const osmium::Way& way, highway_type type)
+double highway_comp_builder::get_highway_width(const osmium::Way& way, highway_type type)
 {
     if (way.tags().has_tag("area", "yes")) {
         return -1.0;
@@ -94,7 +91,7 @@ static double get_highway_width(const osmium::Way& way, highway_type type)
     return width * (50.0 / 58.0);
 }
 
-using way_net = way_network<street_comp>;
+using way_net = way_network<highway_comp>;
 
 static inline int path_num_segs(const way_net::path* path) {
     return int(path->nodes.size()) - 1;
@@ -118,59 +115,9 @@ static inline bool path_has_node(const way_net::path* path, osmium::object_id_ty
     return std::find_if(c.begin(), c.end(), [&](auto& n) { return n.id() == id; }) != c.end();
 }
 
-template <class ...TComps>
-bool street_comp_builder::add_comp(int mesh_obj_idx, const osmium::OSMObject* obj,
-    osm_mesh_comp_db<TComps...>* comp_db, osm_mesh_object::comp_info_vec_t& comp_info)
+static std::vector<way_net::path> get_all_paths(way_net& network)
 {
-    if (obj->type() == osmium::item_type::way)
-    {
-        auto* way = static_cast<const osmium::Way*>(obj);
-
-        int type = get_highway_type(*way);
-        if (type != -1)
-        {
-            auto htype = (highway_type)type;
-            auto& comps_vec = comp_db->comps_vec<street_comp>();
-
-            comps_vec.push_back({
-                .mesh_obj_idx = mesh_obj_idx,
-                .type = htype,
-                .width = get_highway_width(*way, htype)
-            });
-
-            comp_info.push_back({
-                .type = osm_mesh_object::comp_info::COMP_TYPE_STREET,
-                .comp_idx = int(comps_vec.size() - 1)
-            });
-            return true;
-        }
-    }
-    // todo: handle areas
-    return false;
-}
-
-struct way_net_paths
-{
-    types::unord_flat_map<osmium::object_id_type, way_net::path*> path_map;
-    std::vector<way_net::path> footpaths;
-    std::vector<way_net::path> streets;
-    // add more as needed
-};
-
-static way_net_paths get_all_paths(way_net& network)
-{
-    way_net_paths ret;
-    auto add_path = [&](way_net::path&& path) 
-    {
-        if (path.type == WAY_TYPE_FOOTWAY) {
-            ret.footpaths.push_back(std::move(path));
-        }
-        else if (path.type == WAY_TYPE_STREET) {
-            ret.streets.push_back(std::move(path));
-        }
-        else { assert_msg(false, "Unhandled path type %d", path.type); }
-    };
-
+    std::vector<way_net::path> ret;
     way_net::edge_map_t<bool> visited_edges;
 
     // traverse outwards from _all_ nodes instead of just intersections to ensure
@@ -207,29 +154,23 @@ static way_net_paths get_all_paths(way_net& network)
                     path0_nodes.push_back(node);
                 }
 
-                add_path(std::move(paths[0]));
+                ret.push_back(std::move(paths[0]));
             }
             else {
-                if (collected[0]) { add_path(std::move(paths[0])); }
-                if (collected[1]) { add_path(std::move(paths[1])); }
+                if (collected[0]) { ret.push_back(std::move(paths[0])); }
+                if (collected[1]) { ret.push_back(std::move(paths[1])); }
             }
         }
         else {
             for (auto adj_nodeid : adj_node_ids) {
                 way_net::path path;
                 if (network.path_to_intersection(nodeitr, adj_nodeid, visited_edges, path)) {
-                    add_path(std::move(path));
+                    ret.push_back(std::move(path));
                 }
             }
         }
     }
 
-    for (auto* pvec : { &ret.footpaths, &ret.streets }) {
-        for (auto& path : *pvec) {
-            ret.path_map[path.nodes.front().id()] = &path;
-            ret.path_map[path.nodes.back().id()] = &path;
-        }
-    }
     return ret;
 }
 
@@ -272,42 +213,44 @@ static void gen_path_drawdata(draw_datad& dd, const way_net::path& path, double 
 //    return true;
 //}
 
-template <class ...TComps>
-bool street_comp_builder::build_all(const osm_mesh_object_db* obj_db,
-    osm_mesh_comp_db<TComps...>* comp_db, std::vector<draw_datad>& out_drawdata)
+bool highway_comp_builder::do_build_all(const osm_mesh_object_db* obj_db, 
+    const std::vector<highway_comp>& highways, const std::vector<bldg_comp>& buildings, 
+    std::vector<draw_datad>& out_drawdata)
 {
     constexpr double eps = 1e-9;
 
-    logMESSAGE("%zu ways, %zu nodes", m_highways.size(), m_num_highway_nodes);
+    logMESSAGE("%zu ways, %zu nodes", highways.size(), m_num_hiway_nodes);
     
     auto tbegin = clk::now();
 
     way_net network;
-    timeit("Street network construction", [&]()
+    timeit("Network construction", [&]()
     {
-        for (const auto& way : m_highways)
+        for (const auto& way : highways)
         {
-            for (size_t i = 0; i < way.nodes.size(); ++i)
-            {
-                auto* prev_waynode = (i == 0) ? nullptr : &way.nodes[i - 1];
-                auto* cur_waynode = &way.nodes[i];
-                auto* next_waynode = (i == way.nodes.size() - 1) ? nullptr : &way.nodes[i + 1];
+            auto& way_osm = obj_db->get_osm_obj<osm_way>(way.mesh_obj_idx);
 
-                auto nodeitr = network.get_or_add_node(cur_waynode->id, cur_waynode->vert);
+            for (size_t i = 0; i < way_osm.nodes.size(); ++i)
+            {
+                auto* prev_way_node = (i == 0) ? nullptr : &way_osm.nodes[i - 1];
+                auto* cur_way_node = &way_osm.nodes[i];
+                auto* next_way_node = (i == way_osm.nodes.size() - 1) ? nullptr : &way_osm.nodes[i + 1];
+
+                auto nodeitr = network.get_or_add_node(cur_way_node->id, cur_way_node->vert);
 
                 auto& adj_node_ids = nodeitr->second.adj_node_ids;
-                if (prev_waynode) {
-                    adj_node_ids.insert(prev_waynode->id);
+                if (prev_way_node) {
+                    adj_node_ids.insert(prev_way_node->id);
                 }
-                if (next_waynode) {
-                    adj_node_ids.insert(next_waynode->id);
-                    network.add_edge({ nodeitr->first, next_waynode->id }, &way);
+                if (next_way_node) {
+                    adj_node_ids.insert(next_way_node->id);
+                    network.add_edge({ nodeitr->first, next_way_node->id }, &way);
                 }
             }
         }
     });
     
-    way_net_paths all_paths;
+    std::vector<way_net::path> all_paths;
     timeit("Path extraction", [&]() {
         all_paths = get_all_paths(network);
     });
@@ -339,7 +282,7 @@ bool street_comp_builder::build_all(const osm_mesh_object_db* obj_db,
         //for (const auto& footpath : all_paths.footpaths) {
         //    gen_path_drawdata(footpath_dd, footpath, eps);
         //}
-        for (const auto& street : all_paths.streets) {
+        for (const auto& street : all_paths) {
             gen_path_drawdata(street_dd, street, eps);
         }
     });
@@ -347,8 +290,8 @@ bool street_comp_builder::build_all(const osm_mesh_object_db* obj_db,
     uint32_t num_tris = street_dd.num_tris() + footpath_dd.num_tris();
     uint32_t num_verts = street_dd.num_verts() + footpath_dd.num_verts();
 
-    drawdata.push_back(std::move(footpath_dd));
-    drawdata.push_back(std::move(street_dd));
+    //drawdata.push_back(std::move(footpath_dd));
+    out_drawdata.push_back(std::move(street_dd));
     //drawdata.push_back(std::move(debug_dd));
 
     auto tend = clk::now();

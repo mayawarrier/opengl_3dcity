@@ -9,7 +9,7 @@
 #include <osmium/osm/area.hpp>
 #include <osmium/geom/mercator_projection.hpp>
 
-#include "mesh_comp_builders/types.hpp"
+#include "comp_builders/types.hpp"
 
 #include "common.hpp"
 
@@ -39,15 +39,20 @@ public:
 
     // Add linear way. Closed ways should use add_area().
     bool add_way(const osmium::Way& way)
-    {
+    {     
         lock_nodes();
+
+        if (way.is_closed()) {
+            logERROR("Closed way %lld should be added as an area", way.id());
+            return false;
+        }
 
         auto comps = get_comps(&way);
 
-        bbox2d bbox = bbox2d::empty();
+        bbox2d bbox;
         if (!comps.empty())
         {
-            std::vector<osm_node> nodes(way.nodes().size());
+            std::vector<osm_node> nodes;
             for (auto& nr : way.nodes()) {
                 nodes.push_back(nr_to_osm_node(nr, bbox));
             }
@@ -95,7 +100,7 @@ public:
                 assert(ring.is_closed() && ring.size() >= 3);
 
                 int start_idx = int(nodes.size());
-                int ring_size = int(ring.size() - 1);
+                int ring_size = int(ring.size()) - 1;
 
                 for (int i = 0; i < ring_size; ++i) {
                     nodes.push_back(get_node(ring[i]));
@@ -107,8 +112,8 @@ public:
                 ring_bounds.push_back({ poly_idx, start_idx, ring_size });
             };
 
-            int poly_idx = 0;
-            bbox2d bbox = bbox2d::empty();
+            bbox2d bbox;
+            int poly_idx = 0;          
             for (const auto& outer_ring : area.outer_rings()) 
             {
                 add_ring(poly_idx, outer_ring, ORIENT_CCW, [&](const auto& nr) { 
@@ -124,7 +129,7 @@ public:
 
             osm_area::multipoly_t polys(area.outer_rings().size());
             for (const auto& [poly_idx, start_idx, ring_size] : ring_bounds) {
-                polys[poly_idx].push_back({ &nodes[start_idx], ring_size });
+                polys[poly_idx].push_back({ &nodes[start_idx], size_t(ring_size) });
             }
 
             const char* name = area.tags()["name"];
@@ -167,9 +172,9 @@ public:
                 logMESSAGE("-----------------------------------------------");
                 logMESSAGE("Generating %s meshes...", comp_type);
 
-                ret &= builder.build_all(&m_obj_db, &m_comp_db, out_drawdata);
-                if (!ret) {
+                if (!builder.build_all(&m_obj_db, &m_comp_db, out_drawdata)) {
                     logERROR("Failed to build %s meshes", comp_type);
+                    ret = false;
                 }
             };
             (do_build(builders), ...);

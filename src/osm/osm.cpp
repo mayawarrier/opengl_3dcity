@@ -14,8 +14,8 @@
 #include <osmium/dynamic_handler.hpp>
 #include <glm/glm.hpp>
 
-#include "mesh_comp_builders/streets.hpp"
-#include "mesh_comp_builders/buildings.hpp"
+#include "comp_builders/highways.hpp"
+#include "comp_builders/buildings.hpp"
 #include "mesh_builder.hpp"
 
 #include "osm.hpp"
@@ -56,12 +56,12 @@ public:
 
 private:
     template <class TMeshBuilder>
-    class manager : public osmium::relations::RelationsManager<manager, true, true, false, true>
+    class manager : public osmium::relations::RelationsManager<manager<TMeshBuilder>, true, true, false, true>
     {
     public:
         manager(osm_reader& reader, TMeshBuilder& mesh_builder) :
             m_mesh_builder(mesh_builder),
-            m_reader(reader),
+            m_reader(reader)
         {}
 
         // First pass.
@@ -158,7 +158,7 @@ bool read_osmfile(const std::string& filepath_or_url, osm_data& out_data)
 {
     osm_mesh_builder<
         bldg_comp_builder, 
-        street_comp_builder
+        highway_comp_builder
     > mesh_builder;
 
     try {
