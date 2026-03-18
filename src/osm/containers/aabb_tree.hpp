@@ -6,7 +6,7 @@
 #include <boost/container/small_vector.hpp>
 
 #include "../common.hpp"
-#include "../geom.hpp"
+#include "../geom/geom.hpp"
 #include "fwd.hpp"
 
 
@@ -66,20 +66,20 @@ public:
     {}
 
     // Changes the order of the source array!
-    explicit aabb_tree(aabb_tree_unsafe_ctor_t, std::span<T> objects, const Traits& traits = Traits()) :
+    aabb_tree(aabb_tree_unsafe_ctor_t, std::span<T> objects, const Traits& traits = Traits()) :
         aabb_tree(objects, traits)
     {}
 
     // Changes the order of the source array!
-    explicit aabb_tree(aabb_tree_unsafe_ctor_t, std::span<T> objects, Traits&& traits) :
+    aabb_tree(aabb_tree_unsafe_ctor_t, std::span<T> objects, Traits&& traits) :
         aabb_tree(objects, std::move(traits))
     {}
 
-    explicit aabb_tree(std::span<const T> objects, const Traits& traits = Traits()) :
+    aabb_tree(std::span<const T> objects, const Traits& traits = Traits()) :
         aabb_tree(copy_objects_t{}, objects, traits)
     {}
 
-    explicit aabb_tree(std::span<const T> objects, Traits&& traits) :
+    aabb_tree(std::span<const T> objects, Traits&& traits) :
         aabb_tree(copy_objects_t{}, objects, std::move(traits))
     {}
 
@@ -155,7 +155,7 @@ public:
             double sqdist = std::numeric_limits<double>::infinity();
             if (has_nodeid(nidx) && 
                 (query_flags & node_flags(m_nodes[nidx])).any() &&
-                intersects_subtree(query, node_bbox(m_nodes[nidx]), dist_range, sqdist) &&
+                query_intersects_bbox(query, dist_range, node_bbox(m_nodes[nidx]), sqdist) &&
                 sqdist < best_qdata.sqdist) 
             {
                 search_nodeids.push_back(nidx);
@@ -280,10 +280,9 @@ private:
         }
     }
 
-    bool intersects_subtree(const ray<N>& ray, 
-        const bbox<N>& subtree_bbox, const param_range& dist_range, double& out_sqdist) const
+    bool query_intersects_bbox(const ray<N>& ray, 
+        const param_range& dist_range, const bbox<N>& bbox, double& out_sqdist) const
     {
-        auto& bbox = subtree_bbox;
         double dentry = -std::numeric_limits<double>::infinity();
         double dexit = std::numeric_limits<double>::infinity();
 
@@ -315,10 +314,9 @@ private:
         return true;
     }
 
-    bool intersects_subtree(const glm::vec<N, double>& query, 
-        const bbox<N>& subtree_bbox, const param_range& radius_range, double& out_sqdist) const
+    bool query_intersects_bbox(const glm::vec<N, double>& query, 
+        const param_range& radius_range, const bbox<N>& bbox, double& out_sqdist) const
     {
-        auto& bbox = subtree_bbox;
         assert(radius_range.nonneg());
 
         double dmin2 = 0.0, dmax2 = 0.0;

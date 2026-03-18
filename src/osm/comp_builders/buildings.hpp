@@ -5,26 +5,50 @@
 #include "types.hpp"
 
 
-// todo: add types
+// todo: add more types
 // https://wiki.openstreetmap.org/wiki/Buildings
 enum building_type
 {
     BUILDING_TYPE_YES
 };
 
-// todo: add types
+// todo: add more types
 // https://wiki.openstreetmap.org/wiki/Key:building:part
 enum building_part_type
 {
-    BUILDING_PART_TYPE_YES
-};
+    BUILDING_PART_TYPE_YES,
 
+    // Illegal type. bldg_comp.type will never be set to this.
+    // Mappers in rare cases add building:part=no in combination
+    // with building=yes to indicate that the building must 
+    // only be rendered as its parts.
+    BUILDING_PART_TYPE_NO 
+};
 
 struct bldg_comp
 {
     int mesh_obj_idx;
-    double bldg_ht_btm, bldg_ht_top;
-    double roof_ht_top;
+
+    // building_type or building_part_type, 
+    // depending on is_part
+    int type; 
+
+    bool is_part;
+    bool parts_only; // building=yes + building:part=no
+    bool has_ht_btm, has_ht_top;
+    
+    // ht_btm and ht_top are set to default values of
+    // 0.0 and 3.0 respectively if the corresponding 
+    // has_ht_flag is false.
+    double ht_btm, ht_top;
+    double roof_ht;
+
+    double overlap(const bldg_comp& other) const
+    {
+        double overlap_btm = std::max(ht_btm, other.ht_btm);
+        double overlap_top = std::min(ht_top, other.ht_top);
+        return std::max(0.0, overlap_top - overlap_btm);
+    }
 };
 
 struct bldg_comp_builder
@@ -39,36 +63,47 @@ struct bldg_comp_builder
         if (obj->type() != osmium::item_type::area) {
             return false;
         }
+
         auto* area = static_cast<const osmium::Area*>(obj);
-
         auto& tags = area->tags();
-        bool is_building = tags.has_key("building");
-        bool is_bldg_part = tags.has_key("building:part");
 
-        if (is_building || is_bldg_part)
+        int bldg_type = get_building_type(tags);
+        int bldg_part_type = get_building_part_type(tags);
+
+        if (bldg_type != -1 || bldg_part_type != -1)
         {
-            auto type = is_building ?
-                osm_mesh_object::comp_info::COMP_TYPE_BUILDING :
-                osm_mesh_object::comp_info::COMP_TYPE_BUILDING_PART;
+            // prefer bldg_type over bldg_part_type as authoritative 
+            // (see note for BUILDING_PART_TYPE_NO)
+            
+            osm_comp_type comp_type = bldg_type != -1 ? 
+                COMP_TYPE_BUILDING : COMP_TYPE_BUILDING_PART;
 
-            int subtype = is_building ?
-                building_type::BUILDING_TYPE_YES :
-                building_part_type::BUILDING_PART_TYPE_YES;
+            if (bldg_part_type == BUILDING_PART_TYPE_NO) {
+                if (comp_type != COMP_TYPE_BUILDING) {
+                    return false;
+                }
+                logWARNING("%s %lld has building=yes and building:part=no",
+                    area->from_way() ? "Way" : "Relation", area->orig_id());
+            }
 
             auto& comps_vec = comp_db->comps_vec<bldg_comp>();
             bldg_comp comp = {
                 .mesh_obj_idx = mesh_obj_idx,
+                .type = comp_type == COMP_TYPE_BUILDING ? bldg_type : bldg_part_type,
+                .is_part = comp_type == COMP_TYPE_BUILDING_PART,            
+                .parts_only = bldg_part_type == BUILDING_PART_TYPE_NO
             };
             set_bldg_heights(tags, comp);
 
             comps_vec.push_back(comp);
 
             comp_info.push_back({
-                .type = type,
-                .comp_idx = int(comps_vec.size() - 1)
+                .type = comp_type,
+                .comp_idx = int(comps_vec.size()) - 1
             });
             return true;
         }
+
         return false;
     }
 
@@ -83,6 +118,23 @@ struct bldg_comp_builder
 private:
     bool do_build_all(const osm_mesh_object_db* obj_db, 
         const std::vector<bldg_comp>& bldgs, std::vector<draw_datad>& out_drawdata);
+
+    int get_building_type(const osmium::TagList& tags) const
+    {
+        if (tags.has_key("building")) {
+            return BUILDING_TYPE_YES;
+        }
+        return -1;
+    }
+    int get_building_part_type(const osmium::TagList& tags) const
+    {
+        const char* bldg_part = tags["building:part"];
+        if (!bldg_part) {
+            return -1;
+        }
+        if (std::strcmp(bldg_part, "no") == 0) return BUILDING_PART_TYPE_NO;
+        return BUILDING_PART_TYPE_YES;
+    }
 
     void set_bldg_heights(const osmium::TagList& tags, bldg_comp& comp);
 };

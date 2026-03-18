@@ -9,7 +9,7 @@
 #include <osmium/osm/node_ref_list.hpp>
 
 #include "../containers/way_network.hpp"
-#include "../geom.hpp"
+#include "../geom/geom.hpp"
 #include "../mesh_builder.hpp"
 
 #include "highways.hpp"
@@ -226,9 +226,10 @@ bool highway_comp_builder::do_build_all(const osm_mesh_object_db* obj_db,
     way_net network;
     timeit("Network construction", [&]()
     {
-        for (const auto& way : highways)
+        for (const auto& way_comp : highways)
         {
-            auto& way_osm = obj_db->get_osm_obj<osm_way>(way.mesh_obj_idx);
+            auto& way = obj_db->get<osm_mesh_object>(way_comp.mesh_obj_idx);
+            auto& way_osm = obj_db->get<osm_way>(way.osm_obj_idx);
 
             for (size_t i = 0; i < way_osm.nodes.size(); ++i)
             {
@@ -244,7 +245,7 @@ bool highway_comp_builder::do_build_all(const osm_mesh_object_db* obj_db,
                 }
                 if (next_way_node) {
                     adj_node_ids.insert(next_way_node->id);
-                    network.add_edge({ nodeitr->first, next_way_node->id }, &way);
+                    network.add_edge({ nodeitr->first, next_way_node->id }, &way_comp);
                 }
             }
         }

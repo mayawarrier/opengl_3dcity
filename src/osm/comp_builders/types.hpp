@@ -10,29 +10,43 @@
 #include "../common.hpp"
 #include "../containers/aabb_tree.hpp"
 
+
+enum osm_comp_type
+{
+    COMP_TYPE_STREET,
+    COMP_TYPE_BUILDING,
+    COMP_TYPE_BUILDING_PART,
+    COMP_NUM_TYPES // keep this last
+};
+
 struct osm_mesh_object
 {
     struct comp_info
     {
-        enum etype
-        {
-            COMP_TYPE_STREET,
-            COMP_TYPE_BUILDING,
-            COMP_TYPE_BUILDING_PART,
-            COMP_NUM_TYPES // keep this last
-        };
-        etype type;
+        osm_comp_type type;
         int comp_idx;
     };
-    using comp_flags_t = std::bitset<comp_info::COMP_NUM_TYPES>;
+    using comp_flags_t = std::bitset<COMP_NUM_TYPES>;
     using comp_info_vec_t = types::small_vector<comp_info, 1>;
 
     osm_obj_type type;
     int osm_obj_idx;
     bbox2d bbox;
     comp_flags_t comp_flags;
-    comp_info_vec_t comps;
+    comp_info_vec_t comps; // Comp types must not repeat.
     std::string name;
+
+    int get_comp_idx(osm_comp_type type) const 
+    {
+        if (comps.empty() || comps[0].type != type) [[ unlikely ]]
+        {
+            auto icomp_it = std::ranges::find_if(comps, [&](const auto& ci) {
+                return ci.type == type;
+            });
+            return icomp_it != comps.end() ? icomp_it->comp_idx : -1;
+        }
+        return comps[0].comp_idx;
+    }
 
     struct aabb_traits
     {
@@ -53,19 +67,35 @@ struct osm_mesh_object_db
     std::vector<osm_way> ways;
     std::vector<osm_area> areas;
     std::vector<osm_mesh_object> objects;
-    aabb_tree2d<osm_mesh_object*> obj_tree;
+    aabb_tree2d<const osm_mesh_object*> obj_tree;
 
-    template <class OsmObj>
-    const OsmObj& get_osm_obj(int idx) const
+    template <class Obj>
+    const Obj& get(int idx) const
     {
-        if constexpr (std::same_as<OsmObj, osm_node>) {
+        if constexpr (std::same_as<Obj, osm_node>) {
             return nodes[idx];
-        } else if constexpr (std::same_as<OsmObj, osm_way>) {
+        } else if constexpr (std::same_as<Obj, osm_way>) {
             return ways[idx];
-        } else if constexpr (std::same_as<OsmObj, osm_area>) {
+        } else if constexpr (std::same_as<Obj, osm_area>) {
             return areas[idx];
+        } else if constexpr (std::same_as<Obj, osm_mesh_object>) {
+            return objects[idx];
         } else {
-            static_assert(deferred_false_v<OsmObj>, "Unsupported OSM object type");
+            static_assert(deferred_false_v<Obj>, "Unsupported object type");
+        }
+    }
+
+    osmium::object_id_type obj_osm_id(const osm_mesh_object& mesh_obj) const {
+        switch (mesh_obj.type) {
+            case OSM_OBJ_TYPE_NODE:
+                return nodes[mesh_obj.osm_obj_idx].id;
+            case OSM_OBJ_TYPE_WAY:
+                return ways[mesh_obj.osm_obj_idx].id;
+            case OSM_OBJ_TYPE_AREA:
+                return areas[mesh_obj.osm_obj_idx].id;
+            default:
+                assert_msg(false, "Invalid OSM object type");
+                return -1;
         }
     }
 };

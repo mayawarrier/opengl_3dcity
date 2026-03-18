@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <vector>
 #include <string>
+#include <ranges>
 
 #include <osmium/osm/types.hpp>
 #include <glm/glm.hpp>
@@ -165,7 +166,6 @@ struct bbox
     }
 };
 
-
 // 2D axis-aligned bounding box
 using bbox2d = bbox<2>; 
 // 3D axis-aligned bounding box
@@ -213,10 +213,12 @@ struct osm_way : osm_object
 
 struct osm_area : osm_object
 {
-    // most areas are not multipolygons, so optimize for this case
-    using poly_t = std::vector<std::span<const osm_node>>;
+    // Most areas are single polygon + single ring, so optimize for this case.
+    using poly_t = types::small_vector<std::span<const osm_node>, 1>;
     using multipoly_t = types::small_vector<poly_t, 1>;
 
+    // Poly rings are spans into the nodes vector. 
+    // Rings in the same polygon are always stored contiguously.
     std::vector<osm_node> nodes;
     multipoly_t polys;
 
@@ -228,33 +230,45 @@ struct osm_area : osm_object
         nodes(std::forward<NodeVec>(nodes)), 
         polys(std::forward<PolyVec>(polys)) 
     {}
+
+    inline bool is_multipoly() const {
+        return polys.size() > 1;
+    }
 };
 
+inline double vert_x(const glm::dvec2& vert) { return vert.x; }
+inline double vert_y(const glm::dvec2& vert) { return vert.y; }
 
-template <class TVert>
-double vert_x(const TVert&) {
-    static_assert(deferred_false_v<TVert>, "not implemented");
-}
-template <class TVert>
-double vert_y(const TVert&) {
-    static_assert(deferred_false_v<TVert>, "not implemented");
-}
+inline double vert_x(const osm_node& n) { return n.vert.x; }
+inline double vert_y(const osm_node& n) { return n.vert.y; }
 
 template <class TVert>
 glm::dvec2 vert_to_dvec2(const TVert& vert) {
     return { vert_x(vert), vert_y(vert) };
 }
 
-template <>
-inline double vert_x(const glm::dvec2& vert) { return vert.x; }
+template <class TVert>
+concept Vertex = requires(const TVert& vert)
+{
+    { vert_x(vert) } -> std::convertible_to<double>;
+    { vert_y(vert) } -> std::convertible_to<double>;
+};
 
-template <>
-inline double vert_y(const glm::dvec2& vert) { return vert.y; }
+template <class TRing>
+concept Ring = 
+    std::ranges::contiguous_range<TRing> && 
+    Vertex<std::ranges::range_value_t<TRing>>;
 
-template <>
-inline double vert_x(const osm_node& n) { return n.vert.x; }
+// First ring is the outer ring, subsequent rings are inner rings (if any).
+// Outer ring must be CCW, inner rings CW.
+template <class TPoly>
+concept RingedPolygon = 
+    std::ranges::contiguous_range<TPoly> && 
+    Ring<std::ranges::range_value_t<TPoly>>;
 
-template <>
-inline double vert_y(const osm_node& n) { return n.vert.y; }
+template <class TMultiPoly>
+concept RingedMultiPolygon = 
+    std::ranges::contiguous_range<TMultiPoly> && 
+    RingedPolygon<std::ranges::range_value_t<TMultiPoly>>;
 
 #endif

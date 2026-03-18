@@ -12,7 +12,8 @@
 #include <limits>
 #include <span>
 
-#include "common.hpp"
+#include "../common.hpp"
+
 
 // Get a vector perpendicular to the input i.e. cross(z, vec).
 // Applies a 90 degree CCW rotation.
@@ -145,34 +146,53 @@ orient_t path_orient(const auto& verts)
     return orient_type(orient);
 }
 
-// Check if triangles are oriented CCW or collinear.
-bool check_triangles_oriented(const auto& verts, std::span<const uint32_t> indices)
+// Check if triangles are oriented a certain way. 
+// If allow_coll is true, then degenerate triangles are allowed.
+bool check_tris_oriented(const auto& verts, 
+    std::span<const uint32_t> indices, orient_t desired_orient, bool allow_coll = true)
 {
     for (size_t i = 0; i < indices.size(); i += 3)
     {
         auto v0 = vert_to_dvec2(verts[indices[i]]);
         auto v1 = vert_to_dvec2(verts[indices[i + 1]]);
         auto v2 = vert_to_dvec2(verts[indices[i + 2]]);
-        if (orient(v0, v1, v2) == ORIENT_CW) {
+        
+        auto o = orient(v0, v1, v2);
+        if (o != desired_orient && !(allow_coll && o == ORIENT_COLL)) {
             return false;
         }
     }
     return true;
 }
 
-// First span is the outer ring, subsequent spans are inner rings (if any).
-// Outer ring must be CCW, inner rings CW.
-using polygon_cspan = std::span<std::span<const glm::dvec2>>;
-using polygon_span = std::span<std::span<glm::dvec2>>;
+// Polygon templates below are explicitly instantiated
+// as they generate a lot of code or require heavy headers.
 
-// Check if a polygon is inside another polygon.
-bool polygon_covered_by(polygon_cspan inner_poly, polygon_cspan outer_poly);
+// Fraction of outer multipolygon covered by inner multipolygons.
+// The inner multipolygons must be fully covered by the outer multipolygon.
+// \return value in [0, 1].
+template <class TMultiPoly> requires RingedMultiPolygon<TMultiPoly>
+double multipoly_coverage(std::span<const TMultiPoly*> inner_mpolys, const TMultiPoly& outer_mpoly);
+
+// Check if a multipolygon is inside another multipolygon.
+// \param tol: max area of uncovered region in meters squared.
+template <class TMultiPoly> requires RingedMultiPolygon<TMultiPoly>
+bool multipoly_covered_by(const TMultiPoly& inner_mpoly, const TMultiPoly& outer_mpoly, double tol);
 
 // Triangulate polygon.
-std::vector<uint32_t> polygon_triangulate(polygon_cspan polygon);
+template <class TPoly> requires RingedPolygon<TPoly>
+std::vector<uint32_t> polygon_triangulate(const TPoly& polygon);
 
 // Triangulate a thick polyline.
 void polyline_triangulate(std::span<const glm::dvec2> polyline, double width, draw_datad& dd, double eps = 1e-9);
 
+// extern templates produce bogus VCR001 warnings, but there's no way to disable them. sigh
+extern template double multipoly_coverage<osm_area::multipoly_t>(
+    std::span<const osm_area::multipoly_t*>, const osm_area::multipoly_t&);
+
+extern template bool multipoly_covered_by<osm_area::multipoly_t>(
+    const osm_area::multipoly_t&, const osm_area::multipoly_t&, double);
+
+extern template std::vector<uint32_t> polygon_triangulate<osm_area::poly_t>(const osm_area::poly_t&);
 
 #endif

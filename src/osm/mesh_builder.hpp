@@ -39,15 +39,13 @@ public:
 
     // Add linear way. Closed ways should use add_area().
     bool add_way(const osmium::Way& way)
-    {     
+    {
+        assert_msg(!way.is_closed(), "Closed ways must be added as areas");
         lock_nodes();
 
-        if (way.is_closed()) {
-            logERROR("Closed way %lld should be added as an area", way.id());
-            return false;
-        }
-
-        auto comps = get_comps(&way);
+        osm_mesh_object::comp_info_vec_t comps;
+        osm_mesh_object::comp_flags_t comp_flags;
+        get_comps(&way, comps, comp_flags);
 
         bbox2d bbox;
         if (!comps.empty())
@@ -57,11 +55,12 @@ public:
                 nodes.push_back(nr_to_osm_node(nr, bbox));
             }
 
+            m_obj_db.ways.push_back({ 
+                way.id(), 
+                std::move(nodes) 
+            });
+
             const char* name = way.tags()["name"];
-            auto comp_flags = get_comp_flags(comps);
-
-            m_obj_db.ways.push_back({ way.id(), std::move(nodes) });
-
             m_obj_db.objects.push_back({
                 .type = OSM_OBJ_TYPE_WAY,
                 .osm_obj_idx = int(m_obj_db.ways.size() - 1),
@@ -80,14 +79,15 @@ public:
     // Add area.
     bool add_area(const osmium::Area& area)
     {
-        lock_nodes();
-
         if (area.outer_rings().empty()) {
             logWARNING("Rejecting area %lld as it has no outer rings", area.orig_id());
             return false;
         }
+        lock_nodes();
 
-        auto comps = get_comps(&area);
+        osm_mesh_object::comp_info_vec_t comps;
+        osm_mesh_object::comp_flags_t comp_flags;
+        get_comps(&area, comps, comp_flags);
 
         if (!comps.empty()) 
         {
@@ -132,15 +132,13 @@ public:
                 polys[poly_idx].push_back({ &nodes[start_idx], size_t(ring_size) });
             }
 
-            const char* name = area.tags()["name"];
-            auto comp_flags = get_comp_flags(comps);
-
             m_obj_db.areas.push_back({ 
                 area.orig_id(), 
                 std::move(nodes), 
                 std::move(polys) 
             });
             
+            const char* name = area.tags()["name"];
             m_obj_db.objects.push_back({
                 .type = OSM_OBJ_TYPE_AREA,
                 .osm_obj_idx = int(m_obj_db.areas.size() - 1),
@@ -157,11 +155,11 @@ public:
     // Build meshes.
     bool build(std::vector<draw_datad>& out_drawdata)
     {
-        buffer<osm_mesh_object*> obj_ptrs(m_obj_db.objects.size(), buffer_overwrite);
+        buffer<const osm_mesh_object*> obj_ptrs(m_obj_db.objects.size(), buffer_overwrite);
         for (size_t i = 0; i < m_obj_db.objects.size(); ++i) {
             obj_ptrs.ptr[i] = &m_obj_db.objects[i];
         }
-        m_obj_db.obj_tree = aabb_tree2d<osm_mesh_object*>(aabb_tree_unsafe_ctor_t{}, obj_ptrs.span());
+        m_obj_db.obj_tree = { aabb_tree_unsafe_ctor_t{}, obj_ptrs.span() };
 
         bool ret = true;
         std::apply([&](auto&... builders) 
@@ -211,22 +209,20 @@ private:
         return node;
     }
 
-    osm_mesh_object::comp_info_vec_t get_comps(const osmium::OSMObject* obj)
+    bool get_comps(const osmium::OSMObject* obj, 
+        osm_mesh_object::comp_info_vec_t& out_comps, osm_mesh_object::comp_flags_t& out_flags)
     {
-        osm_mesh_object::comp_info_vec_t comps;
         std::apply([&](auto&... builders) {
-            (builders.add_comp(int(m_obj_db.objects.size()), obj, &m_comp_db, comps), ...);
+            (builders.add_comp(int(m_obj_db.objects.size()), obj, &m_comp_db, out_comps), ...);
         }, m_comp_builders);
-        return comps;
-    }
 
-    osm_mesh_object::comp_flags_t get_comp_flags(const osm_mesh_object::comp_info_vec_t& comps)
-    {
-        osm_mesh_object::comp_flags_t flags;
-        for (const auto& comp_info : comps) {
-            flags.set(comp_info.type);
+        for (const auto& comp : out_comps) {
+            if (out_flags.test(comp.type)) {
+                assert_msg(false, "Object %lld has multiple comps of type %d", obj->id(), comp.type);
+                return false;
+            }
+            out_flags.set(comp.type);
         }
-        return flags;
     }
 
 private:

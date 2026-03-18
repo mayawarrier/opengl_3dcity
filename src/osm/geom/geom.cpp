@@ -1,13 +1,13 @@
 
 #include <array>
-
-#include <clipper2/clipper.h>
 #include <mapbox/earcut.hpp>
+#include <clipper2/clipper.h>
 
 #define GLM_ENABLE_EXPERIMENTAL 1
 #include <glm/gtc/constants.hpp>
 
 #include "geom.hpp"
+
 
 static inline seg_inter_type classify_seg_inter_type(double param1, double param2)
 {
@@ -114,67 +114,119 @@ glm::dvec2 rotate_vec2(const glm::dvec2& vec, double angle)
     };
 }
 
-static Clipper2Lib::PathsD get_clipper_poly(polygon_cspan in_poly, bbox2d& bbox)
+template <class TMultiPoly>
+static void add_clipper_paths(Clipper2Lib::PathsD& paths, const TMultiPoly& mpoly, bbox2d& bbox)
 {
     using namespace Clipper2Lib;
-    
-    PathsD clpoly;
-    for (const auto& ring : in_poly) {
-        PathD path;
-        for (const auto& v : ring) {
-            path.push_back(PointD{ v.x, v.y });
-            bbox.extend(v);
+
+    for (const auto& poly : mpoly) {
+        for (const auto& ring : poly) {
+            PathD path;
+            for (const auto& v : ring) {
+                path.push_back(PointD{ vert_x(v), vert_y(v) });           
+            }
+            paths.push_back(std::move(path));
         }
-        clpoly.push_back(std::move(path));
     }
-    return clpoly;
+    for (const auto& poly : mpoly) {
+        auto& outer_ring = poly[0];
+        for (const auto& v : outer_ring) {
+            bbox.extend(glm::dvec2{ vert_x(v), vert_y(v) });
+        }
+    }
 }
 
-bool polygon_covered_by(polygon_cspan inner, polygon_cspan outer)
+template <class TMultiPoly>
+static Clipper2Lib::PathsD get_clipper_paths(const TMultiPoly& mpoly, bbox2d& bbox)
+{
+    Clipper2Lib::PathsD paths;
+    add_clipper_paths(paths, mpoly, bbox);   
+    return paths;
+}
+
+static void center_clipper_paths(Clipper2Lib::PathsD& paths, glm::dvec2 center)
+{
+    for (auto& path : paths) {
+        for (auto& pt : path) {
+            pt.x -= center.x;
+            pt.y -= center.y;
+        }
+    }
+}
+
+template <class TMultiPoly> requires RingedMultiPolygon<TMultiPoly>
+bool multipoly_covered_by(const TMultiPoly& inner, const TMultiPoly& outer, double tol)
 {
     using namespace Clipper2Lib;
 
     bbox2d bbox;
-    PathsD clip_path = get_clipper_poly(outer, bbox);
-    PathsD subj_path = get_clipper_poly(inner, bbox);
+    PathsD clip_paths = get_clipper_paths(outer, bbox);
+    PathsD subj_paths = get_clipper_paths(inner, bbox);
 
     auto bb_center = bbox.center();
-    for (auto& paths : { &subj_path, &clip_path }) {
-        for (auto& path : *paths) {
-            for (auto& pt : path) {
-                pt.x -= bb_center.x;
-                pt.y -= bb_center.y;
-            }
-        }
-    }
+    center_clipper_paths(clip_paths, bb_center);
+    center_clipper_paths(subj_paths, bb_center);
 
-    PathsD solution = Difference(subj_path, clip_path, FillRule::NonZero, 8);
-    return solution.empty() || Area(solution[0]) < 1e-2;
+    // note: using NonZero here, polygons must have consistent winding
+    PathsD solution = Difference(subj_paths, clip_paths, FillRule::NonZero, 8);
+    return solution.empty() || Area(solution) < tol;
 }
+
+template bool multipoly_covered_by<osm_area::multipoly_t>(
+    const osm_area::multipoly_t&, const osm_area::multipoly_t&, double);
+
+template<class TMultiPoly> requires RingedMultiPolygon<TMultiPoly>
+double multipoly_coverage(std::span<const TMultiPoly*> inner_mpolys, const TMultiPoly& outer_mpoly)
+{
+    using namespace Clipper2Lib;
+
+    bbox2d bbox;
+    PathsD inner_subj_paths;
+    for (const auto& inner_mpoly : inner_mpolys) {
+        add_clipper_paths(inner_subj_paths, *inner_mpoly, bbox);
+    }
+    PathsD outer_paths = get_clipper_paths(outer_mpoly, bbox);
+
+    auto bb_center = bbox.center();
+    center_clipper_paths(inner_subj_paths, bb_center);
+    center_clipper_paths(outer_paths, bb_center);
+
+    // note: using NonZero here, polygons must have consistent winding
+    PathsD inner_union = Union(inner_subj_paths, FillRule::NonZero, 8);
+    PathsD covered = Intersect(inner_union, outer_paths, FillRule::NonZero, 8);
+
+    return std::clamp(Area(covered) / Area(outer_paths), 0., 1.);
+}
+
+template double multipoly_coverage<osm_area::multipoly_t>(
+    std::span<const osm_area::multipoly_t*>, const osm_area::multipoly_t&);
 
 // Earcut extension
 namespace mapbox {
-    namespace util {
-
-        template <>
-        struct nth<0, glm::dvec2> {
-            inline static auto get(const glm::dvec2& t) {
-                return t.x;
-            };
+    namespace util 
+    {
+        template <Vertex T>
+        struct nth<0, T> {
+            inline static auto get(const T& t) {
+                return vert_x(t);
+            }
         };
-        template <>
-        struct nth<1, glm::dvec2> {
-            inline static auto get(const glm::dvec2& t) {
-                return t.y;
-            };
+        template <Vertex T>
+        struct nth<1, T> {
+            inline static auto get(const T& t) {
+                return vert_y(t);
+            }
         };
     }
 }
 
-std::vector<uint32_t> polygon_triangulate(polygon_cspan polygon)
+template <class TPoly> requires RingedPolygon<TPoly>
+std::vector<uint32_t> polygon_triangulate(const TPoly& polygon)
 {
     return mapbox::earcut<uint32_t>(polygon);
 }
+
+template std::vector<uint32_t> polygon_triangulate<osm_area::poly_t>(const osm_area::poly_t&);
 
 static void segment_triangulate(glm::dvec2 p0, glm::dvec2 p1, double width, draw_datad& dd)
 {

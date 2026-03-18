@@ -75,7 +75,6 @@ using clk = tim::steady_clock;
 using uint = unsigned int;
 
 
-
 template <typename T>
 struct size
 {
@@ -369,6 +368,46 @@ inline void timeit(const char* msg, auto&& func)
     func();
     auto tend = clk::now();
     logMESSAGE("--- %s: %s", msg, clock_dur_str(tend - tbegin).c_str());
+}
+
+template <class It, class Pred>
+It get_one_of(It first, It last, Pred pred) 
+{
+    It found_itr = last;
+    for (; first != last; ++first) {
+        if (pred(*first)) {
+            if (found_itr == last) {
+                found_itr = first;
+            } else {
+                return last;
+            }
+        }
+    }
+    return found_itr;
+}
+
+template <std::input_iterator It, class Proj = std::identity>
+std::string str_join(It first, It last, std::string_view delim, Proj proj = {})
+{
+    std::string result;
+    for (auto it = first; it != last; ++it) {
+        if (it != first) {
+            result += delim;
+        }
+        auto&& projected = std::invoke(proj, *it);
+        if constexpr (std::is_convertible_v<decltype(projected), std::string_view>) {
+            result += projected;
+        } else {
+            result += std::to_string(projected);
+        }
+    }
+    return result;
+}
+
+template <std::ranges::input_range Range, class Proj = std::identity>
+std::string str_join(Range&& r, std::string_view delim, Proj proj = {})
+{
+    return str_join(std::ranges::begin(r), std::ranges::end(r), delim, proj);
 }
 
 struct ebco_first_then_second_args_t {

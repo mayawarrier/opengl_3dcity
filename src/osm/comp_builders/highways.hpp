@@ -75,7 +75,7 @@ struct highway_comp_builder
                     .width = get_highway_width(*way, htype)
                 });
                 comp_info.push_back({
-                    .type = osm_mesh_object::comp_info::COMP_TYPE_STREET,
+                    .type = COMP_TYPE_STREET,
                     .comp_idx = int(comps_vec.size() - 1)
                 });
 
