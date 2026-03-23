@@ -63,6 +63,7 @@ struct osm_mesh_object
 
 struct osm_mesh_object_db
 {
+    bbox2d objs_bbox;
     std::vector<osm_node> nodes;
     std::vector<osm_way> ways;
     std::vector<osm_area> areas;

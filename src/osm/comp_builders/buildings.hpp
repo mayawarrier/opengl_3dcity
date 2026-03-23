@@ -25,7 +25,7 @@ enum building_part_type
     BUILDING_PART_TYPE_NO 
 };
 
-struct bldg_comp
+struct building_comp
 {
     int mesh_obj_idx;
 
@@ -43,7 +43,7 @@ struct bldg_comp
     double ht_btm, ht_top;
     double roof_ht;
 
-    double overlap(const bldg_comp& other) const
+    double overlap(const building_comp& other) const
     {
         double overlap_btm = std::max(ht_btm, other.ht_btm);
         double overlap_top = std::min(ht_top, other.ht_top);
@@ -53,7 +53,7 @@ struct bldg_comp
 
 struct bldg_comp_builder
 {
-    using comp_type = bldg_comp;
+    using comp_type = building_comp;
     constexpr const char* comp_type_name() const { return "building"; }
 
     template <class ...TComps>
@@ -63,31 +63,30 @@ struct bldg_comp_builder
         if (obj->type() != osmium::item_type::area) {
             return false;
         }
+        const auto* area = static_cast<const osmium::Area*>(obj);
 
-        auto* area = static_cast<const osmium::Area*>(obj);
-        auto& tags = area->tags();
-
+        auto& tags = obj->tags();
         int bldg_type = get_building_type(tags);
         int bldg_part_type = get_building_part_type(tags);
 
         if (bldg_type != -1 || bldg_part_type != -1)
         {
-            // prefer bldg_type over bldg_part_type as authoritative 
+            // prefer bldg_type over bldg_part_type as authoritative
+            // since objects might have both building and building:part tags
             // (see note for BUILDING_PART_TYPE_NO)
-            
-            osm_comp_type comp_type = bldg_type != -1 ? 
-                COMP_TYPE_BUILDING : COMP_TYPE_BUILDING_PART;
+            osm_comp_type comp_type = bldg_type != -1 ? COMP_TYPE_BUILDING : COMP_TYPE_BUILDING_PART;
 
-            if (bldg_part_type == BUILDING_PART_TYPE_NO) {
+            if (bldg_part_type == BUILDING_PART_TYPE_NO) 
+            {
                 if (comp_type != COMP_TYPE_BUILDING) {
                     return false;
                 }
-                logWARNING("%s %lld has building=yes and building:part=no",
+                logDEBUG(LOG_MESSAGE, "%s %lld has building=yes and building:part=no", 
                     area->from_way() ? "Way" : "Relation", area->orig_id());
             }
 
-            auto& comps_vec = comp_db->comps_vec<bldg_comp>();
-            bldg_comp comp = {
+            auto& comps_vec = comp_db->comps_vec<building_comp>();
+            building_comp comp = {
                 .mesh_obj_idx = mesh_obj_idx,
                 .type = comp_type == COMP_TYPE_BUILDING ? bldg_type : bldg_part_type,
                 .is_part = comp_type == COMP_TYPE_BUILDING_PART,            
@@ -111,13 +110,13 @@ struct bldg_comp_builder
     bool build_all(const osm_mesh_object_db* obj_db,
         osm_mesh_comp_db<TComps...>* comp_db, std::vector<draw_datad>& out_drawdata)
     {
-        auto& bldgs = comp_db->comps_vec<bldg_comp>();
+        auto& bldgs = comp_db->comps_vec<building_comp>();
         return do_build_all(obj_db, bldgs, out_drawdata);
     }
 
 private:
     bool do_build_all(const osm_mesh_object_db* obj_db, 
-        const std::vector<bldg_comp>& bldgs, std::vector<draw_datad>& out_drawdata);
+        const std::vector<building_comp>& bldgs, std::vector<draw_datad>& out_drawdata);
 
     int get_building_type(const osmium::TagList& tags) const
     {
@@ -136,7 +135,7 @@ private:
         return BUILDING_PART_TYPE_YES;
     }
 
-    void set_bldg_heights(const osmium::TagList& tags, bldg_comp& comp);
+    void set_bldg_heights(const osmium::TagList& tags, building_comp& comp);
 };
 
 

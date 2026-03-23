@@ -142,6 +142,12 @@ struct bbox
         min(vec_t(std::numeric_limits<double>::infinity())), 
         max(vec_t(-std::numeric_limits<double>::infinity())) 
     {}
+
+    bbox(const vec_t& min, const vec_t& max) : 
+        min(min), max(max) 
+    {
+        assert(glm::all(glm::lessThanEqual(min, max)));
+    }
     
     void extend(const bbox& other)
     {
@@ -159,10 +165,30 @@ struct bbox
         return (min + max) / 2.0;
     }
 
+    // Scale all dimensions by a factor, keeping center fixed.
+    bbox<N> scaled(double scale) const
+    {
+        vec_t center = this->center();
+        vec_t half_vec = (this->max - this->min) / 2.0;
+        vec_t new_half_vec = half_vec * scale;
+        return { center - new_half_vec, center + new_half_vec };
+    }
+
+    // Scale area by a factor, keeping center fixed.
+    bbox<N> scaled_by_area(double area_scale) const {
+        return scaled(std::sqrt(area_scale));
+    }
+
     bool intersects(const bbox& rhs) const {
         return
             glm::all(glm::lessThanEqual(this->min, rhs.max)) &&
             glm::all(glm::greaterThanEqual(this->max, rhs.min));
+    }
+
+    bool inside(const bbox& outer) const {
+        return 
+            glm::all(glm::greaterThanEqual(this->min, outer.min)) &&
+            glm::all(glm::lessThanEqual(this->max, outer.max));
     }
 };
 
@@ -233,6 +259,10 @@ struct osm_area : osm_object
 
     inline bool is_multipoly() const {
         return polys.size() > 1;
+    }
+
+    static std::span<const osm_node> poly_nodes(const poly_t& poly) {
+        return std::span(&poly.front().front(), poly.back().data() + poly.back().size());
     }
 };
 

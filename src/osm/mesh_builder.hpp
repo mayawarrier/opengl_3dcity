@@ -7,6 +7,7 @@
 #include <osmium/osm/node.hpp>
 #include <osmium/osm/way.hpp>
 #include <osmium/osm/area.hpp>
+#include <osmium/relations/relations_database.hpp>
 #include <osmium/geom/mercator_projection.hpp>
 
 #include "comp_builders/types.hpp"
@@ -37,6 +38,10 @@ public:
         return true;
     }
 
+    // todo: there are closed ways that are not areas!
+    // (and sometimes they can be both, according to different tags).
+    // https://wiki.openstreetmap.org/wiki/Area
+
     // Add linear way. Closed ways should use add_area().
     bool add_way(const osmium::Way& way)
     {
@@ -47,9 +52,9 @@ public:
         osm_mesh_object::comp_flags_t comp_flags;
         get_comps(&way, comps, comp_flags);
 
-        bbox2d bbox;
         if (!comps.empty())
         {
+            bbox2d bbox;
             std::vector<osm_node> nodes;
             for (auto& nr : way.nodes()) {
                 nodes.push_back(nr_to_osm_node(nr, bbox));
@@ -70,6 +75,7 @@ public:
                 .name = name ? name : ""
             });
 
+            m_obj_db.objs_bbox.extend(bbox);
             return true;
         }
 
@@ -148,6 +154,7 @@ public:
                 .name = name ? name : ""
             });
 
+            m_obj_db.objs_bbox.extend(bbox);
             return true;
         }
     }

@@ -214,7 +214,7 @@ static void gen_path_drawdata(draw_datad& dd, const way_net::path& path, double 
 //}
 
 bool highway_comp_builder::do_build_all(const osm_mesh_object_db* obj_db, 
-    const std::vector<highway_comp>& highways, const std::vector<bldg_comp>& buildings, 
+    const std::vector<highway_comp>& highways, const std::vector<building_comp>& buildings, 
     std::vector<draw_datad>& out_drawdata)
 {
     constexpr double eps = 1e-9;

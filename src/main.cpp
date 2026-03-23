@@ -40,7 +40,7 @@ int main(int argc, char* argv[])
     }
 
     osm_data osmdata;
-    if (!read_osmfile("assets/maps/testmap_larger.osm", osmdata)) {
+    if (!read_osmfile("assets/maps/london.osm", osmdata)) {
         logERROR("Failed to read OSM map file");
         return -1;
     }

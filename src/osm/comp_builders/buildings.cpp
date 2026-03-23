@@ -14,7 +14,7 @@
 #include "buildings.hpp"
 
 
-void bldg_comp_builder::set_bldg_heights(const osmium::TagList& tags, bldg_comp& comp)
+void bldg_comp_builder::set_bldg_heights(const osmium::TagList& tags, building_comp& comp)
 {
     int levels, min_level;
     double height, min_height;
@@ -41,14 +41,21 @@ void bldg_comp_builder::set_bldg_heights(const osmium::TagList& tags, bldg_comp&
     comp.roof_ht = -1.0; // not supported yet
 }
 
-// Maps building parts to their parent buildings.
-class bldg_part_mapper
+class bldg_part_map_logger
 {
-private:
-    using comp_mapping_t = types::unord_flat_map<const bldg_comp*, std::vector<const bldg_comp*>>;
-
-    struct part_map_log
+public:
+    enum log_stage_type
     {
+        STAGE_INTER,
+        STAGE_COVER,
+        STAGE_PASS2,
+        STAGE_PASS3,
+        NUM_STAGES
+    };
+
+    struct log
+    {
+        int stage;
         osmium::object_id_type part_id;
         std::vector<osmium::object_id_type> inter_bldg_ids;
         std::vector<osmium::object_id_type> covered_bldg_ids;
@@ -57,78 +64,211 @@ private:
     };
 
 public:
+    bldg_part_map_logger(const osm_mesh_object_db* obj_db) :
+        m_obj_db(obj_db)
+    {}
+
+    log& new_log(const building_comp* part_comp, osmium::object_id_type id)
+    {
+        auto& log = m_logs[part_comp];
+        log.part_id = id;
+        log.stage = -1;
+        return log;
+    }
+
+    log& get_log(const building_comp* part_comp) {
+        return m_logs.at(part_comp);
+    }
+
+    void log_stage(log& log, log_stage_type stage, std::span<const osm_mesh_object*> bldgs)
+    {
+        auto& log_vec = [&]() -> std::vector<osmium::object_id_type>& {
+            switch (stage) {
+                case STAGE_INTER: return log.inter_bldg_ids;
+                case STAGE_COVER: return log.covered_bldg_ids;
+                case STAGE_PASS2: return log.pass2_bldg_ids;
+                case STAGE_PASS3: return log.pass3_bldg_ids;
+            }
+            assert_msg(false, "Invalid stage");
+            return log.inter_bldg_ids; // silence compiler
+        }();
+
+        for (const auto* bldg : bldgs) {
+            log_vec.push_back(m_obj_db->obj_osm_id(*bldg));
+        }     
+        log.stage = stage;
+    }
+
+    void log_unmapped_parts(std::span<const building_comp*> unmapped_parts, const bbox2d& bldgs_bbox) const
+    {
+        std::array<std::vector<const building_comp*>, NUM_STAGES> uparts_per_stage;
+        for (const auto* part_comp : unmapped_parts) {
+            auto& log = m_logs.at(part_comp);
+            if (log.stage >= 0) {
+                uparts_per_stage[log.stage].push_back(part_comp);
+            }
+        }
+
+        bbox2d smaller_bbox = bldgs_bbox.scaled(0.8);
+        std::vector<const building_comp*> boundary_uparts;
+
+        for (int stage = 0; stage < NUM_STAGES; ++stage) 
+        {
+            if (!uparts_per_stage[stage].empty())
+            {
+                logDEBUG(LOG_WARNING, "------------- Unmapped parts after %s -------------",
+                    stage_name(log_stage_type(stage)));
+
+                for (const auto* part_comp : uparts_per_stage[stage]) {
+                    auto& part = m_obj_db->get<osm_mesh_object>(part_comp->mesh_obj_idx);
+                    if (part.bbox.inside(smaller_bbox)) {
+                        log_failure(m_logs.at(part_comp));
+                    } else {
+                        boundary_uparts.push_back(part_comp);
+                    }
+                }
+            }
+        }
+        if (!boundary_uparts.empty()) {
+            logDEBUG(LOG_WARNING, "------- Unmapped parts near or at map boundary ----------");
+        }
+        for (const auto* part_comp : boundary_uparts) {
+            log_failure(m_logs.at(part_comp));
+        }
+    }
+
+private:
+    static void log_failure(const log& log)
+    {
+        std::string logstr = "Part " + std::to_string(log.part_id) + ": ";
+
+        if (log.inter_bldg_ids.empty()) {
+            logstr += "No intersecting buildings";
+        }
+        else {
+            logstr += "\n";
+            logstr += "--- Intersected: ";
+            logstr += str_join(log.inter_bldg_ids, ", ");
+            logstr += "\n";
+
+            if (!log.covered_bldg_ids.empty()) {
+                logstr += "--- Covered: ";
+                logstr += str_join(log.covered_bldg_ids, ", ");
+                logstr += "\n";
+            }
+            if (!log.pass2_bldg_ids.empty()) {
+                logstr += "--- After pass 2: ";
+                logstr += str_join(log.pass2_bldg_ids, ", ");
+                logstr += "\n";
+            }
+            if (!log.pass3_bldg_ids.empty()) {
+                logstr += "--- After pass 3: ";
+                logstr += str_join(log.pass3_bldg_ids, ", ");
+                logstr += "\n";
+            }
+        }
+
+        if (logstr.back() == '\n') {
+            logstr.pop_back();
+        }
+        logDEBUG(LOG_MESSAGE, logstr.c_str());
+    }
+
+    const char* stage_name(log_stage_type stage) const
+    {
+        switch (stage) {
+            case STAGE_INTER: return "intersection";
+            case STAGE_COVER: return "removing uncovered";
+            case STAGE_PASS2: return "pass 2";
+            case STAGE_PASS3: return "pass 3";
+            default: return "unknown";
+        }
+    }
+
+private:
+    const osm_mesh_object_db* m_obj_db;
+    types::unord_flat_map<const building_comp*, log> m_logs;
+};
+
+// Maps building parts to their parent buildings.
+class bldg_part_mapper
+{
+private:
+    using comp_mapping_t = types::unord_flat_map<const building_comp*, std::vector<const building_comp*>>;
+public:
     using bldg2part_map_type = comp_mapping_t;
 
 public:
     bldg_part_mapper(const osm_mesh_object_db* obj_db,
-        const std::vector<bldg_comp>& all_comps,
-        const std::vector<const bldg_comp*>& part_comps) :
+        const std::vector<building_comp>& all_comps,
+        const std::vector<const building_comp*>& part_comps) :
         m_obj_db(obj_db),
         m_all_comps(all_comps),
-        m_part_comps(part_comps)
-    {}
+        m_part_comps(part_comps),
+        m_logger(obj_db)
+    {
+        for (auto& comp: all_comps) {
+            auto& bldg = m_obj_db->get<osm_mesh_object>(comp.mesh_obj_idx);
+            m_bldgs_bbox.extend(bldg.bbox);
+        }
+    }
 
     void do_mapping()
     {
-        types::unord_flat_map<const bldg_comp*, part_map_log> mapping_logs;
-
         for (auto* part_comp : m_part_comps)
         {
             auto& part = m_obj_db->get<osm_mesh_object>(part_comp->mesh_obj_idx);
             auto& part_osm = m_obj_db->get<osm_area>(part.osm_obj_idx);
-            
-            auto& log = mapping_logs[part_comp];
-            log.part_id = part_osm.id;
+            auto& log = m_logger.new_log(part_comp, part_osm.id);
 
             osm_mesh_object::comp_flags_t search_flags;
             search_flags.set(COMP_TYPE_BUILDING);
 
             // Get nearby buildings.
-            auto cand_bldgs = m_obj_db->obj_tree.query_intersecting_bboxes(part.bbox, search_flags);
+            auto cand_bldgs = m_obj_db->obj_tree.query_intersecting_bboxes(part.bbox, search_flags);       
+            m_logger.log_stage(log, m_logger.STAGE_INTER, cand_bldgs);
+
             if (cand_bldgs.empty()) {
-                logDEBUG(LOG_WARNING, "Part %lld tree query returned nothing", part_osm.id);
                 m_unmapped_parts.push_back(part_comp);
                 continue;
             }
-            for (const auto* bldg : cand_bldgs) {
-                log.inter_bldg_ids.push_back(m_obj_db->obj_osm_id(*bldg));
-            }
 
             // Remove buildings whose polygons do not fully contain the part.
-            std::erase_if(cand_bldgs, [&](const auto* bldg) {
+            std::erase_if(cand_bldgs, [&](const auto* bldg) 
+            {
+                // todo: consider using a relative tolerance based 
+                // on the part + cand area instead of an absolute one, larger
+                // buildings in london often fail to be mapped
+                static constexpr double COVERAGE_AREA_TOL = 0.1; // m^2
+
                 auto& bldg_osm = m_obj_db->get<osm_area>(bldg->osm_obj_idx);
-                return !multipoly_covered_by(part_osm.polys, bldg_osm.polys, 1e-2);
+                return !multipoly_covered_by(part_osm.polys, bldg_osm.polys, COVERAGE_AREA_TOL);
             });
-            for (const auto* bldg : cand_bldgs) {
-                log.covered_bldg_ids.push_back(m_obj_db->obj_osm_id(*bldg));
-            }
-            if (cand_bldgs.empty()) {               
-                log_failure(log);
+            m_logger.log_stage(log, m_logger.STAGE_COVER, cand_bldgs);
+
+            if (cand_bldgs.empty()) {
                 m_unmapped_parts.push_back(part_comp);            
                 continue;
             }
 
-            // todo: in many cases it seems like the parts do not encompass the full building polygon,
-            // and the outline must be drawn in that case.
-
             if (cand_bldgs.size() == 1) {
-                m_bldg2part_map[get_comp_ptr(cand_bldgs[0])].push_back(part_comp);
+                auto* bldg_comp = get_comp_ptr(cand_bldgs[0]);
+                m_bldg2part_map[bldg_comp].push_back(part_comp);
             } else {
-                logDEBUG(LOG_WARNING, "Part %lld is covered by multiple buildings", part_osm.id);
                 map_part_pass2(part_comp, cand_bldgs, log);
             }
         }
 
-        for (auto& [part_comp, bldg_comps] : m_pass3_part2bldg)
-        {
-            if (!map_part_pass3(part_comp, bldg_comps, mapping_logs[part_comp])) {
-                log_failure(mapping_logs[part_comp]);
+        for (auto& [part_comp, bldg_comps] : m_pass3_part2bldg) {
+            if (!map_part_pass3(part_comp, bldg_comps, m_logger.get_log(part_comp))) {
                 m_unmapped_parts.push_back(part_comp);
             }
         }
+
+        m_logger.log_unmapped_parts(m_unmapped_parts, m_bldgs_bbox);
     }
 
-    const std::vector<const bldg_comp*>& unmapped_parts() const {
+    const std::vector<const building_comp*>& unmapped_parts() const {
         return m_unmapped_parts;
     }
 
@@ -137,112 +277,85 @@ public:
     }
 
 private:
-    const bldg_comp* get_comp_ptr(const osm_mesh_object* obj) const {
+    const building_comp* get_comp_ptr(const osm_mesh_object* obj) const {
         return &m_all_comps[obj->get_comp_idx(COMP_TYPE_BUILDING)];
     }
 
-    void log_failure(const part_map_log& log)
-    {
-        logDEBUG(LOG_WARNING, "Could not map part %lld to a building", log.part_id);
-
-        std::string logstr;
-        if (!log.inter_bldg_ids.empty()) {
-            logstr += "Intersected: ";
-            logstr += str_join(log.inter_bldg_ids, ", ");
-            logstr += "\n";
-        }
-        if (!log.covered_bldg_ids.empty()) {
-            logstr += "Covered: ";
-            logstr += str_join(log.covered_bldg_ids, ", ");
-            logstr += "\n";
-        }
-        if (!log.pass2_bldg_ids.empty()) {
-            logstr += "After pass 2: ";
-            logstr += str_join(log.pass2_bldg_ids, ", ");
-            logstr += "\n";
-        }
-        if (!log.pass3_bldg_ids.empty()) {
-            logstr += "After pass 3: ";
-            logstr += str_join(log.pass3_bldg_ids, ", ");
-            logstr += "\n";
-        }
-        
-        logDEBUG(LOG_MESSAGE, logstr.c_str());
-    }
-
-    bool map_part_pass2(const bldg_comp* part_comp,
-         std::vector<const osm_mesh_object*>& cand_bldgs, part_map_log& log)
+    bool map_part_pass2(const building_comp* part_comp,
+         std::vector<const osm_mesh_object*>& cand_bldgs, bldg_part_map_logger::log& log)
     {
         auto handle_in_pass3 = [&](const osm_mesh_object* bldg) 
         {
             auto* bldg_comp = get_comp_ptr(bldg);
             m_pass3_bldg2part[bldg_comp].push_back(part_comp);
             m_pass3_part2bldg[part_comp].push_back(bldg_comp);
-            log.pass2_bldg_ids.push_back(m_obj_db->obj_osm_id(*bldg));
+            m_logger.log_stage(log, m_logger.STAGE_PASS2, std::span(&bldg, 1));
         };
 
         auto add_mapping = [&](const osm_mesh_object* bldg) 
         {
             auto* bldg_comp = get_comp_ptr(bldg);
             m_bldg2part_map[bldg_comp].push_back(part_comp);
-            log.pass2_bldg_ids.push_back(m_obj_db->obj_osm_id(*bldg));
+            m_logger.log_stage(log, m_logger.STAGE_PASS2, std::span(&bldg, 1));
         };
 
-        if (!part_comp->has_ht_top) {
-            // part has no height info, defer to pass 3
-            for (const auto* bldg : cand_bldgs) {
-                handle_in_pass3(bldg);
+        auto match_one_of = [&]<class Pred>(Pred pred) 
+        {
+            auto res = get_one_of(cand_bldgs.begin(), cand_bldgs.end(), [&](const auto* bldg) {
+                return std::invoke(pred, get_comp_ptr(bldg));
+            });
+            if (res != cand_bldgs.end()) {
+                add_mapping(*res);
+                return true;
             }
             return false;
-        }
+        };
 
-        // Remove all buildings that do not overlap at all.
-        std::erase_if(cand_bldgs, [&](const auto* bldg) {
-            auto* bldg_comp = get_comp_ptr(bldg);
-            return 
-                bldg_comp->has_ht_top && 
-                !bldg_comp->parts_only &&
-                (part_comp->ht_top < bldg_comp->ht_btm ||
-                    part_comp->ht_btm > bldg_comp->ht_top);
-        });
-        if (cand_bldgs.size() == 1) {
-            add_mapping(cand_bldgs[0]);
-            return true;
-        }
-
-        // if part fits perfectly inside a _single_ building, done!
-        auto res = get_one_of(cand_bldgs.begin(), cand_bldgs.end(), [&](const auto* bldg)
+        if (part_comp->has_ht_top) 
         {
-            auto* bldg_comp = get_comp_ptr(bldg);
-            return bldg_comp->has_ht_top &&
-                (part_comp->ht_btm >= bldg_comp->ht_btm &&
-                    part_comp->ht_top <= bldg_comp->ht_top);
-        });
-        if (res != cand_bldgs.end()) {
-            add_mapping(*res);
-            return true;
-        }
-
-        // For pass 3, only consider buildings that lack height info,
-        // must contain parts, or overlap the part in height by at least 50%
-        double part_height = part_comp->ht_top - part_comp->ht_btm;
-        for (const auto* bldg : cand_bldgs)
-        {
-            auto* bldg_comp = get_comp_ptr(bldg);
-            if (bldg_comp->parts_only || 
-                !bldg_comp->has_ht_top ||
-                part_comp->overlap(*bldg_comp) >= 0.5 * part_height)
-            {
-                handle_in_pass3(bldg);
+            // remove all buildings that do not overlap at all
+            std::erase_if(cand_bldgs, [&](const auto* bldg) {
+                auto* bldg_comp = get_comp_ptr(bldg);
+                return
+                    !bldg_comp->parts_only &&
+                    bldg_comp->has_ht_top &&
+                    (part_comp->ht_top < bldg_comp->ht_btm ||
+                        part_comp->ht_btm > bldg_comp->ht_top);
+                });
+            if (cand_bldgs.size() == 1) {
+                add_mapping(cand_bldgs[0]);
+                return true;
             }
+
+            // a _single_ building perfectly contains the part
+            if (match_one_of([&](const building_comp* bldg_comp) {
+                    return bldg_comp->has_ht_top &&
+                        part_comp->ht_btm >= bldg_comp->ht_btm &&
+                        part_comp->ht_top <= bldg_comp->ht_top;
+                })) {
+                return true;
+            }
+            // a _single_ building indicates that it must contain parts
+            if (match_one_of([&](const building_comp* bldg_comp) {
+                    return bldg_comp->parts_only;
+                })) {
+                return true;
+            }
+        }
+
+        // All remaining buildings either overlap the part in height,
+        // lack height info entirely, and/or must contain parts.
+        // Or the part itself lacks height info.
+        for (const auto* bldg : cand_bldgs) {
+            handle_in_pass3(bldg);
         }
         return false;
     }
 
-    bool map_part_pass3(const bldg_comp* part_comp, 
-        const std::vector<const bldg_comp*>& cand_bldg_comps, part_map_log& log)
+    bool map_part_pass3(const building_comp* part_comp, 
+        const std::vector<const building_comp*>& cand_bldg_comps, bldg_part_map_logger::log& log)
     {
-        // todo: assign it to the one with maximum volume intersection?
+        // todo: assign it to the one with maximum coverage and height intersection?
         // (only if both part and building have heights and were not defaulted),
         // with a minimum coverage of 75% (unless the building is parts only).
         return false;
@@ -250,14 +363,17 @@ private:
 
 private:
     const osm_mesh_object_db* m_obj_db;
-    const std::vector<bldg_comp>& m_all_comps;
-    const std::vector<const bldg_comp*>& m_part_comps;
+    const std::vector<building_comp>& m_all_comps;
+    const std::vector<const building_comp*>& m_part_comps;
+    bbox2d m_bldgs_bbox;
 
     comp_mapping_t m_pass3_part2bldg;
     comp_mapping_t m_pass3_bldg2part;
 
-    std::vector<const bldg_comp*> m_unmapped_parts;
+    std::vector<const building_comp*> m_unmapped_parts;
     comp_mapping_t m_bldg2part_map;
+
+    bldg_part_map_logger m_logger;
 };
 
 
@@ -307,7 +423,7 @@ static void mesh_add_sides(draw_datad& mesh, uint32_t bot_verts_idx,
     }
 }
 
-static bool generate_comp_mesh(draw_datad& mesh, const bldg_comp& comp, const osm_mesh_object_db* obj_db)
+static bool generate_comp_mesh(draw_datad& mesh, const building_comp& comp, const osm_mesh_object_db* obj_db)
 {
     auto& obj = obj_db->get<osm_mesh_object>(comp.mesh_obj_idx);
     auto& obj_osm = obj_db->get<osm_area>(obj.osm_obj_idx);
@@ -315,7 +431,7 @@ static bool generate_comp_mesh(draw_datad& mesh, const bldg_comp& comp, const os
     for (auto& poly : obj_osm.polys) 
     {
         auto tri_indices = polygon_triangulate(poly);
-        auto poly_nodes = std::span(&poly.front().front(), poly.back().data() + poly.back().size()); // yuck
+        auto poly_nodes = osm_area::poly_nodes(poly);
 
         assert(check_tris_oriented(poly_nodes, tri_indices, ORIENT_CCW));
 
@@ -333,10 +449,10 @@ static bool generate_comp_mesh(draw_datad& mesh, const bldg_comp& comp, const os
         {
             auto& hole = poly[ihole];
             auto hole_size = uint32_t(hole.size());
-            auto inner_bot_idx = bot_verts_idx + vert_offset;
-            auto inner_top_idx = top_verts_idx + vert_offset;
+            auto hole_bot_idx = bot_verts_idx + vert_offset;
+            auto hole_top_idx = top_verts_idx + vert_offset;
 
-            mesh_add_sides(mesh, inner_bot_idx, inner_top_idx, hole_size, false);
+            mesh_add_sides(mesh, hole_bot_idx, hole_top_idx, hole_size, false);
             vert_offset += hole_size;
         }
     }
@@ -344,11 +460,11 @@ static bool generate_comp_mesh(draw_datad& mesh, const bldg_comp& comp, const os
 }
 
 bool bldg_comp_builder::do_build_all(const osm_mesh_object_db* obj_db, 
-    const std::vector<bldg_comp>& all_comps, std::vector<draw_datad>& out_drawdata)
+    const std::vector<building_comp>& all_comps, std::vector<draw_datad>& out_drawdata)
 {
     auto tbegin = clk::now();
 
-    std::vector<const bldg_comp*> bldg_comps, part_comps;
+    std::vector<const building_comp*> bldg_comps, part_comps;
     timeit("Bucketing buildings/parts", [&]()
     {    
         for (const auto& comp : all_comps) {
@@ -376,30 +492,44 @@ bool bldg_comp_builder::do_build_all(const osm_mesh_object_db* obj_db,
     size_t num_verts = 0, num_tris = 0;
     auto add_drawdata = [&]<class String>(draw_datad&& dd, String&& name) 
     {
+        dd.color = building_color;
+        dd.name = std::forward<String>(name);
         num_verts += dd.num_verts();
         num_tris += dd.num_tris();
 
-        dd.color = building_color;
-        dd.name = std::forward<String>(name);
         out_drawdata.push_back(std::move(dd));
     };
 
-    auto comp_osm_id = [&](const bldg_comp* comp) {
+    auto comp_osm_id = [&](const building_comp* comp) {
         auto& obj = obj_db->get<osm_mesh_object>(comp->mesh_obj_idx);
         return obj_db->obj_osm_id(obj);
     };
 
-    // Build meshes from the parts
     timeit("Building meshes", [&]()
     {
         auto& unmapped_parts = part_mapper.unmapped_parts();
         auto& bldg2parts = part_mapper.bldg2parts();
+
+        auto add_part_mesh = [&](const building_comp* part_comp) {
+            draw_datad dd;
+            if (generate_comp_mesh(dd, *part_comp, obj_db)) {
+                add_drawdata(std::move(dd), "part " + std::to_string(comp_osm_id(part_comp)));
+            }
+        };
 
         for (auto* bldg_comp : bldg_comps)
         {
             auto& bldg = obj_db->get<osm_mesh_object>(bldg_comp->mesh_obj_idx);
             auto& bldg_osm = obj_db->get<osm_area>(bldg.osm_obj_idx);
             auto bldg_osm_id = obj_db->obj_osm_id(bldg);
+
+            auto add_bldg_mesh = [&]() {
+                draw_datad dd;
+                if (generate_comp_mesh(dd, *bldg_comp, obj_db)) {
+                    auto name = bldg.name.empty() ? "bldg " + std::to_string(bldg_osm_id) : bldg.name;
+                    add_drawdata(std::move(dd), std::move(name));
+                }
+            };
 
             if (bldg.name.empty()) {
                 logDEBUG(LOG_MESSAGE, "Adding building %lld", bldg_osm_id);
@@ -408,34 +538,42 @@ bool bldg_comp_builder::do_build_all(const osm_mesh_object_db* obj_db,
             }
             
             auto bldg_parts_it = bldg2parts.find(bldg_comp);
-            if (bldg_parts_it == bldg2parts.end())
-            {
-                draw_datad dd;
-                if (generate_comp_mesh(dd, *bldg_comp, obj_db)) {
-                    auto name = bldg.name.empty() ? "bldg " + std::to_string(bldg_osm_id) : bldg.name;
-                    add_drawdata(std::move(dd), std::move(name));
-                }
+            if (bldg_parts_it == bldg2parts.end()) {
+                add_bldg_mesh();
             } 
             else {
-                for (auto* part_comp : bldg_parts_it->second)
+                bool draw_parts_only = true;
+                if (!bldg_comp->parts_only)
                 {
-                    auto part_id = comp_osm_id(part_comp);
-                    draw_datad dd;
-                    if (generate_comp_mesh(dd, *part_comp, obj_db)) {
-                        logDEBUG(LOG_MESSAGE, "   Adding part %lld", part_id);
-                        add_drawdata(std::move(dd), "part " + std::to_string(part_id));
+                    std::vector<const osm_area::multipoly_t*> part_polys;
+                    for (auto* part_comp : bldg_parts_it->second)
+                    {
+                        auto& part = obj_db->get<osm_mesh_object>(part_comp->mesh_obj_idx);
+                        auto& part_osm = obj_db->get<osm_area>(part.osm_obj_idx);
+                        part_polys.push_back(&part_osm.polys);
                     }
+                    // Parts often do not cover the entire building so
+                    // in many cases the building polygon must also be drawn.            
+                    double parts_coverage = multipoly_coverage(std::span(part_polys), bldg_osm.polys);
+                    draw_parts_only = parts_coverage > 0.8;
+                }
+
+                std::string partids_str = str_join(bldg_parts_it->second, ", ", [&](const auto* part_comp) {
+                    return comp_osm_id(part_comp);
+                });
+                logDEBUG(LOG_MESSAGE, "--- Parts: %s", partids_str.c_str());
+
+                if (!draw_parts_only) {
+                    add_bldg_mesh();
+                }
+                for (auto* part_comp : bldg_parts_it->second) {
+                    add_part_mesh(part_comp);
                 }
             } 
         }
 
-        for (auto* part_comp : unmapped_parts)
-        {
-            auto part_id = comp_osm_id(part_comp);
-            draw_datad dd;
-            if (generate_comp_mesh(dd, *part_comp, obj_db)) {
-                add_drawdata(std::move(dd), "part " + std::to_string(part_id));
-            }
+        for (auto* part_comp : unmapped_parts) {
+            add_part_mesh(part_comp);
         }
     });
 

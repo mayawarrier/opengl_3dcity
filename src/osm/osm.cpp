@@ -67,13 +67,8 @@ private:
         // First pass.
         bool new_relation(const osmium::Relation& relation) const
         {
-            const char* type = relation.tags()["type"];
-            if (type && (!std::strcmp(type, "multipolygon") || !std::strcmp(type, "boundary")))
-            {
-                // Keep any mp relation with at least one member way.
-                // Member relations will be discarded later (TRelations is false).
-                auto& members = relation.members();
-                return std::any_of(members.cbegin(), members.cend(), [](auto& member) {
+            if (is_multipolygon(relation.tags())) {
+                return std::ranges::any_of(relation.members(), [](auto& member) {
                     return member.type() == osmium::item_type::way;
                 });
             }
@@ -88,11 +83,14 @@ private:
 
             for (const auto& member : relation.members())
             {
-                if (member.ref() != 0) {
-                    // TNodes is true, might get nodes here.
+                if (member.ref() != 0) 
+                {
+                    // TNodes is true, might get nodes. 
+                    // Ignore them because they can't be part of a multipolygon.
                     if (member.type() == osmium::item_type::node) {
                         continue;
                     }
+                    // should only have ways now!
                     assert(member.type() == osmium::item_type::way);
 
                     auto* way = this->get_member_way(member.ref());
@@ -102,7 +100,6 @@ private:
                     rel_ways.push_back(way);
                 }
             }
-
             osmium::area::Assembler assembler{ m_reader.m_area_assm_cfg };
             assembler(relation, rel_ways, this->buffer());
         }
@@ -117,7 +114,7 @@ private:
             add_way_or_area(way);
         }
 
-        // Second pass.
+        // Second pass (from buffer).
         void area(const osmium::Area& area) {
             m_mesh_builder.add_area(area);
         }
@@ -141,6 +138,11 @@ private:
             else {
                 m_mesh_builder.add_way(way);
             }
+        }
+
+        bool is_multipolygon(const osmium::TagList& tags) const {
+            const char* type = tags["type"];
+            return type && (!std::strcmp(type, "multipolygon") || !std::strcmp(type, "boundary"));
         }
 
     private:

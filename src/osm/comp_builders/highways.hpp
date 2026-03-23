@@ -47,8 +47,6 @@ struct highway_comp
     };
 };
 
-
-
 struct highway_comp_builder
 {
     using comp_type = highway_comp;
@@ -92,13 +90,13 @@ struct highway_comp_builder
         osm_mesh_comp_db<TComps...>* comp_db, std::vector<draw_datad>& out_drawdata)
     {
         auto& streets = comp_db->comps_vec<highway_comp>();
-        auto& bldgs = comp_db->comps_vec<bldg_comp>();
+        auto& bldgs = comp_db->comps_vec<building_comp>();
         return do_build_all(obj_db, streets, bldgs, out_drawdata);
     }
 
 private:
     bool do_build_all(const osm_mesh_object_db* obj_db, const std::vector<highway_comp>& highways,
-        const std::vector<bldg_comp>& buildings, std::vector<draw_datad>& out_drawdata);
+        const std::vector<building_comp>& buildings, std::vector<draw_datad>& out_drawdata);
 
     int get_highway_type(const osmium::Way& way);
     double get_highway_width(const osmium::Way& way, highway_type type);
