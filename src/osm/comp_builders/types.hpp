@@ -63,7 +63,10 @@ struct osm_mesh_object
 
 struct osm_mesh_object_db
 {
-    bbox2d objs_bbox;
+    glm::dvec2 center;
+    // Vert scale to account for mercator projection distortion.
+    double vert_scale;
+
     std::vector<osm_node> nodes;
     std::vector<osm_way> ways;
     std::vector<osm_area> areas;

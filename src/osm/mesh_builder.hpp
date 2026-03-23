@@ -75,7 +75,6 @@ public:
                 .name = name ? name : ""
             });
 
-            m_obj_db.objs_bbox.extend(bbox);
             return true;
         }
 
@@ -154,7 +153,6 @@ public:
                 .name = name ? name : ""
             });
 
-            m_obj_db.objs_bbox.extend(bbox);
             return true;
         }
     }
@@ -167,6 +165,10 @@ public:
             obj_ptrs.ptr[i] = &m_obj_db.objects[i];
         }
         m_obj_db.obj_tree = { aabb_tree_unsafe_ctor_t{}, obj_ptrs.span() };
+
+        m_obj_db.center = m_center;
+        double center_lat = osmium::geom::detail::y_to_lat(m_center.y);
+        m_obj_db.vert_scale = 1.0 / std::cos(glm::radians(center_lat));
 
         bool ret = true;
         std::apply([&](auto&... builders) 

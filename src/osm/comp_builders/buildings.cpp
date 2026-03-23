@@ -435,8 +435,8 @@ static bool generate_comp_mesh(draw_datad& mesh, const building_comp& comp, cons
 
         assert(check_tris_oriented(poly_nodes, tri_indices, ORIENT_CCW));
 
-        uint32_t bot_verts_idx = mesh_add_polygon(mesh, poly_nodes, tri_indices, comp.ht_btm);
-        uint32_t top_verts_idx = mesh_add_polygon(mesh, poly_nodes, tri_indices, comp.ht_top, true);
+        uint32_t bot_verts_idx = mesh_add_polygon(mesh, poly_nodes, tri_indices, comp.ht_btm * obj_db->vert_scale);
+        uint32_t top_verts_idx = mesh_add_polygon(mesh, poly_nodes, tri_indices, comp.ht_top * obj_db->vert_scale, true);
 
         uint32_t vert_offset = 0;
         
