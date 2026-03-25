@@ -55,7 +55,7 @@ int main(int argc, char* argv[])
     glEnable(GL_PRIMITIVE_RESTART);
     glPrimitiveRestartIndex(std::numeric_limits<uint32_t>::max());
 
-    bool DRAW_WIREFRAME = true;
+    bool DRAW_WIREFRAME = false;
     bool DRAW_TRIANGLES = true;
 
     shaderfile::info shader_stages[2] = {

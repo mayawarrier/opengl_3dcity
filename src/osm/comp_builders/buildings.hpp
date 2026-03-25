@@ -81,7 +81,7 @@ struct bldg_comp_builder
                 if (comp_type != COMP_TYPE_BUILDING) {
                     return false;
                 }
-                logDEBUG(LOG_MESSAGE, "%s %lld has building=yes and building:part=no", 
+                logMESSAGE("%s %lld has building=yes and building:part=no", 
                     area->from_way() ? "Way" : "Relation", area->orig_id());
             }
 

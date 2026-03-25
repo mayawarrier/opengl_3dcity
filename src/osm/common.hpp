@@ -239,12 +239,11 @@ struct osm_way : osm_object
 
 struct osm_area : osm_object
 {
-    // Most areas are single polygon + single ring, so optimize for this case.
     using poly_t = types::small_vector<std::span<const osm_node>, 1>;
     using multipoly_t = types::small_vector<poly_t, 1>;
 
     // Poly rings are spans into the nodes vector. 
-    // Rings in the same polygon are always stored contiguously.
+    // Rings in the same polygon must be stored contiguously!
     std::vector<osm_node> nodes;
     multipoly_t polys;
 
@@ -261,6 +260,7 @@ struct osm_area : osm_object
         return polys.size() > 1;
     }
 
+    // Get the nodes in all rings of a polygon.
     static std::span<const osm_node> poly_nodes(const poly_t& poly) {
         return std::span(&poly.front().front(), poly.back().data() + poly.back().size());
     }
@@ -289,8 +289,8 @@ concept Ring =
     std::ranges::contiguous_range<TRing> && 
     Vertex<std::ranges::range_value_t<TRing>>;
 
-// First ring is the outer ring, subsequent rings are inner rings (if any).
-// Outer ring must be CCW, inner rings CW.
+// First ring is the outer ring, subsequent are inner rings (if any).
+// Outer ring is CCW, inner rings CW.
 template <class TPoly>
 concept RingedPolygon = 
     std::ranges::contiguous_range<TPoly> && 

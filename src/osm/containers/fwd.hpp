@@ -11,8 +11,8 @@ concept AabbTraits = requires(Traits traits, TObj obj) {
     typename Traits::search_flags_type;
     { traits.bbox(obj) } -> std::same_as<const bbox<Dim>&>;
     { traits.flags(obj) } -> std::same_as<const typename Traits::search_flags_type&>;
-}
-&& is_instance_of_nontype<typename Traits::search_flags_type, std::bitset>::value;
+} && 
+    is_instance_of_nontype_template<typename Traits::search_flags_type, std::bitset>::value;
 
 // By default, expect a pointer type. User can provide custom traits if needed.
 template <class T>

@@ -111,7 +111,7 @@ public:
                     nodes.push_back(get_node(ring[i]));
                 }
                 auto ring_span = std::span(&nodes[start_idx], ring_size);
-                if (path_orient(ring_span) != desired_orient) {
+                if (ring_orient(ring_span) != desired_orient) {
                     std::reverse(ring_span.begin(), ring_span.end());
                 }
                 ring_bounds.push_back({ poly_idx, start_idx, ring_size });
@@ -176,9 +176,6 @@ public:
             auto do_build = [&](auto& builder) 
             {
                 const char* comp_type = builder.comp_type_name();
-                logMESSAGE("-----------------------------------------------");
-                logMESSAGE("Generating %s meshes...", comp_type);
-
                 if (!builder.build_all(&m_obj_db, &m_comp_db, out_drawdata)) {
                     logERROR("Failed to build %s meshes", comp_type);
                     ret = false;
@@ -188,7 +185,6 @@ public:
         }, 
             m_comp_builders);
 
-        logMESSAGE("-----------------------------------------------\n");
         return ret;
     }
 

@@ -164,8 +164,10 @@ bool read_osmfile(const std::string& filepath_or_url, osm_data& out_data)
     > mesh_builder;
 
     try {
-        osm_reader reader(filepath_or_url);
-        reader.read_all(mesh_builder);
+        log_func("Reading OSM file", [&]() {
+            osm_reader reader(filepath_or_url);
+            reader.read_all(mesh_builder);
+        });
     }
     catch (const std::exception& e) {
         logERROR("Error reading OSM file: %s", e.what());

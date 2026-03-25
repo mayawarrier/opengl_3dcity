@@ -131,19 +131,57 @@ inline orient_t orient(const glm::dvec2& a, const glm::dvec2& b, const glm::dvec
     return orient_type(v.x * w.y - v.y * w.x);
 }
 
-// Get orientation of a path.
-// https://en.wikipedia.org/wiki/Shoelace_formula
-orient_t path_orient(const auto& verts)
+// Get twice the signed area of a ring. 
+// Positive if vertices are in CCW order, negative if CW, 0 if degenerate.
+template <class TRing> requires Ring<TRing>
+double ring_double_area(const TRing& verts)
 {
-    double orient = 0.0;
+    double ret = 0.0;
     for (size_t icur = 0; icur < verts.size(); ++icur)
     {
         size_t inext = (icur + 1) % verts.size();
         double term1 = vert_y(verts[icur]) + vert_y(verts[inext]);
         double term2 = vert_x(verts[icur]) - vert_x(verts[inext]);
-        orient += term1 * term2;
+        ret += term1 * term2;
     }
-    return orient_type(orient);
+    return ret;
+}
+
+// Get signed area of a ring. 
+// Positive if vertices are in CCW order, negative if CW, 0 if degenerate.
+template <class TRing> requires Ring<TRing>
+double ring_area(const TRing& verts)
+{
+    return ring_double_area(verts) / 2.0;
+}
+
+// Get signed area of a polygon.
+template <class Poly> requires RingedPolygon<Poly>
+double poly_area(const Poly& poly)
+{
+    double area = 0.0;
+    for (const auto& ring : poly) {
+        area += ring_area(ring);
+    }
+    return area;
+}
+
+// Get signed area of a multipolygon.
+template <class MultiPoly> requires RingedMultiPolygon<MultiPoly>
+double multipoly_area(const MultiPoly& mpoly)
+{
+    double area = 0.0;
+    for (const auto& poly : mpoly) {
+        area += poly_area(poly);
+    }
+    return area;
+}
+
+// Get orientation of a ring.
+template <class TRing> requires Ring<TRing>
+orient_t ring_orient(const TRing& verts)
+{
+    return orient_type(ring_double_area(verts));
 }
 
 // Check if triangles are oriented a certain way. 

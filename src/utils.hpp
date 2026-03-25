@@ -98,15 +98,29 @@ enum log_type
     LOG_MESSAGE
 };
 
+// Initialize logger.
 bool log_init(const char* logfile);
+
+// Get the log size in bytes.
+std::int64_t log_size();
+
+// Log errors.
 void logERROR(const char* fmt, ...);
+// Log warnings.
 void logWARNING(const char* fmt, ...);
+// Log messages.
 void logMESSAGE(const char* fmt, ...);
+
+// Log colored messages.
+// \param color_seq the start of an ANSI escape sequence,
+// eg. "\033[1;31m" for bright red.
+void log_colorMESSAGE(const char* color_seq, const char* fmt, ...);
 
 #ifdef NDEBUG
 #define logDEBUG(type, fmt, ...) ((void)0)
 #define assert_msg(cond, fmt, ...) ((void)0)
 #else
+// Log a debug message.
 #define logDEBUG(type, fmt, ...)          \
     do {                                  \
         if (type == LOG_ERROR) {          \
@@ -362,52 +376,28 @@ inline std::string clock_dur_str(const tim::duration<R, P>& dur)
     }
 }
 
-inline void timeit(const char* msg, auto&& func)
+// Log the start/end/execution time of a function.
+inline void log_func(const char* name, auto&& func, const char* prefix = nullptr)
 {
+    size_t header_len = std::max(
+        (prefix ? std::strlen(prefix) : size_t(0)) + std::strlen(name) + 6, 
+        size_t(50));
+    std::string header(header_len, '-');
+
+    log_colorMESSAGE("\033[1;32m", header.c_str());
+    if (prefix) {
+        log_colorMESSAGE("\033[1;32m", "%s: %s...", prefix, name);
+    } else {
+        log_colorMESSAGE("\033[1;32m", "%s...", name);
+    }
+    log_colorMESSAGE("\033[1;32m", header.c_str());
+
     auto tbegin = clk::now();
     func();
     auto tend = clk::now();
-    logMESSAGE("--- %s: %s", msg, clock_dur_str(tend - tbegin).c_str());
-}
-
-template <class It, class Pred>
-It get_one_of(It first, It last, Pred pred) 
-{
-    It found_itr = last;
-    for (; first != last; ++first) {
-        if (pred(*first)) {
-            if (found_itr == last) {
-                found_itr = first;
-            } else {
-                return last;
-            }
-        }
-    }
-    return found_itr;
-}
-
-template <std::input_iterator It, class Proj = std::identity>
-std::string str_join(It first, It last, std::string_view delim, Proj proj = {})
-{
-    std::string result;
-    for (auto it = first; it != last; ++it) {
-        if (it != first) {
-            result += delim;
-        }
-        auto&& projected = std::invoke(proj, *it);
-        if constexpr (std::is_convertible_v<decltype(projected), std::string_view>) {
-            result += projected;
-        } else {
-            result += std::to_string(projected);
-        }
-    }
-    return result;
-}
-
-template <std::ranges::input_range Range, class Proj = std::identity>
-std::string str_join(Range&& r, std::string_view delim, Proj proj = {})
-{
-    return str_join(std::ranges::begin(r), std::ranges::end(r), delim, proj);
+    
+    log_colorMESSAGE("\033[1;32m", "Done in %s", clock_dur_str(tend - tbegin).c_str());
+    log_colorMESSAGE("\033[1;32m", header.c_str());
 }
 
 struct ebco_first_then_second_args_t {
@@ -419,7 +409,7 @@ struct ebco_second_args_t {
 
 //
 // Empty base-class optimization pair. 
-// Stores two values, but if the first is an empty class, it takes no space.
+// Stores two values, but if the first is an empty class, it takes up no space.
 // https://en.cppreference.com/w/cpp/language/ebo.html
 //
 template <class TMaybeEmpty, class U, bool = std::is_empty_v<TMaybeEmpty> && !std::is_final_v<TMaybeEmpty>>
@@ -474,24 +464,83 @@ private:
 // Check if a type is an instance of a template composed
 // entirely of type parameters.
 template <class, template <class...> class>
-struct is_instance_of : std::false_type {};
+struct is_instance_of_template : std::false_type {};
 
 template <class... Args, template <class...> class U>
-struct is_instance_of<U<Args...>, U> : std::true_type {};
+struct is_instance_of_template<U<Args...>, U> : std::true_type {};
 
 // Check if a type is an instance of a template composed
 // entirely of non-type parameters.
 template <class, template <auto...> class>
-struct is_instance_of_nontype : std::false_type {};
+struct is_instance_of_nontype_template : std::false_type {};
 
 template <auto... Args, template <auto...> class U>
-struct is_instance_of_nontype<U<Args...>, U> : std::true_type {};
+struct is_instance_of_nontype_template<U<Args...>, U> : std::true_type {};
 
 // Defer static_asserts until instantiation time
-template <typename...>
+template <class...>
 struct deferred_false : std::false_type {};
 
-template <typename... Ts>
+template <class... Ts>
 constexpr bool deferred_false_v = deferred_false<Ts...>::value;
+
+// Default callback that returns the first arg unchanged.
+struct callback_identity
+{
+    template <class T, class... Rest>
+    constexpr T&& operator()(T&& first, [[maybe_unused]] Rest&&... args) const noexcept {
+        return std::forward<T>(first);
+    }
+};
+
+template <std::input_iterator It, class Pred>
+It get_one_of(It first, It last, Pred pred)
+{
+    It found_itr = last;
+    for (; first != last; ++first) {
+        if (pred(*first)) {
+            if (found_itr == last) {
+                found_itr = first;
+            } else {
+                return last;
+            }
+        }
+    }
+    return found_itr;
+}
+
+template <std::ranges::input_range Range, class Pred>
+std::ranges::borrowed_iterator_t<Range> get_one_of(Range&& r, Pred pred)
+{
+    return get_one_of(std::ranges::begin(r), std::ranges::end(r), pred);
+}
+
+template <std::input_iterator It, class Callback = callback_identity>
+    requires std::invocable<Callback, std::iter_reference_t<It>, int>
+std::string str_join(It first, It last, std::string_view delim, Callback callback = {})
+{
+    int index = 0;
+    std::string result;
+    for (auto it = first; it != last; ++it, ++index)
+    {
+        if (it != first) {
+            result += delim;
+        }
+        auto&& elem = std::invoke(callback, *it, index);
+        if constexpr (std::is_convertible_v<decltype(elem), std::string_view>) {
+            result += std::string_view(elem);
+        } else {
+            result += std::to_string(elem);
+        }
+    }
+    return result;
+}
+
+template <std::ranges::input_range Range, class Callback = callback_identity>
+    requires std::invocable<Callback, std::ranges::range_reference_t<Range>, int>
+std::string str_join(Range&& r, std::string_view delim, Callback callback = {})
+{
+    return str_join(std::ranges::begin(r), std::ranges::end(r), delim, callback);
+}
 
 #endif

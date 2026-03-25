@@ -217,14 +217,18 @@ bool highway_comp_builder::do_build_all(const osm_mesh_object_db* obj_db,
     const std::vector<highway_comp>& highways, const std::vector<building_comp>& buildings, 
     std::vector<draw_datad>& out_drawdata)
 {
-    constexpr double eps = 1e-9;
-
-    logMESSAGE("%zu ways, %zu nodes", highways.size(), m_num_hiway_nodes);
+    static constexpr double eps = 1e-9;
     
     auto tbegin = clk::now();
 
+    logMESSAGE("%zu ways, %zu nodes", highways.size(), m_num_hiway_nodes);
+
+    auto timed_section = [&](const char* name, auto&& func) {
+        log_func(name, std::forward<decltype(func)>(func), "Highway mesher");
+    };
+
     way_net network;
-    timeit("Network construction", [&]()
+    timed_section("Building street network", [&]()
     {
         for (const auto& way_comp : highways)
         {
@@ -252,7 +256,7 @@ bool highway_comp_builder::do_build_all(const osm_mesh_object_db* obj_db,
     });
     
     std::vector<way_net::path> all_paths;
-    timeit("Path extraction", [&]() {
+    timed_section("Extracting paths", [&]() {
         all_paths = get_all_paths(network);
     });
 
@@ -278,7 +282,7 @@ bool highway_comp_builder::do_build_all(const osm_mesh_object_db* obj_db,
     //    }
     //});
 
-    timeit("Path triangulation", [&]()
+    timed_section("Triangulating paths", [&]()
     {
         //for (const auto& footpath : all_paths.footpaths) {
         //    gen_path_drawdata(footpath_dd, footpath, eps);

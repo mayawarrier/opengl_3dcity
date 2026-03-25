@@ -1,16 +1,24 @@
 
-#include <cstdarg>
-#include <array>
-#include <debugbreak.h>
-
 #ifdef _WIN32
     #include "win32.hpp"
+
 #elif defined(__unix__) || defined(__unix) || (defined(__APPLE__) && defined(__MACH__))
+    // https://lwn.net/Articles/592652/
+    // https://man7.org/linux/man-pages/man3/fseeko.3.html
+    // note: musl does not make ftello available without a feature macro,
+    // even if _FILE_OFFSET_BITS=64 is defined
+    #define _GNU_SOURCE 1
+    #define _FILE_OFFSET_BITS 64
+    
     #include <unistd.h>
     #if defined(_POSIX_VERSION) && _POSIX_VERSION >= 200112L
         #define HAS_POSIX_2001 1
     #endif
 #endif
+
+#include <cstdarg>
+#include <array>
+#include <debugbreak.h>
 
 #include "utils.hpp"
 
@@ -28,13 +36,18 @@ static bool posix_has_term_colors()
 }
 #endif
 
-static file_ptr LOGFILE(nullptr, nullptr);
-static bool LOG_COLOR_CONSOLE = false;
+struct global_logger
+{
+    file_ptr file;
+    bool has_colors;
+};
+static global_logger LOG{ {nullptr, nullptr}, false };
 
 bool log_init(const char* logfile)
 {
-    LOGFILE = SAFE_FOPENA(logfile, "w");
-    if (!LOGFILE) {
+    // note: binary mode
+    LOG.file = SAFE_FOPENA(logfile, "wb");
+    if (!LOG.file) {
         // can't log an error, show a message box
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
             "Error", "Could not create log file", NULL);
@@ -42,69 +55,83 @@ bool log_init(const char* logfile)
     }
 
 #ifdef _WIN32
-    LOG_COLOR_CONSOLE = win32_console_enable_colors();
-    
+    LOG.has_colors = win32_console_enable_colors();  
     if (!win32_console_enable_utf8()) {
         logWARNING("Failed to enable UTF-8");
     };
-
 #elif defined(HAS_POSIX_2001)
-    LOG_COLOR_CONSOLE = posix_has_term_colors();
+    LOG.has_colors = posix_has_term_colors();
 #endif
     return true;
 }
 
-static void log_to_stream(std::FILE* stream, const char* prefix, 
-    const char* fmt, std::va_list vlist, bool flush = false)
+std::int64_t log_size()
+{
+#if defined(_WIN32)
+    return _ftelli64(LOG.file.get());
+#elif defined(HAS_POSIX_2001)
+    return ::ftello(LOG.file.get());
+#else
+    return std::ftell(LOG.file.get());
+#endif
+}
+
+static void log_to_stream(
+    std::FILE* stream, const char* fmt, std::va_list vlist,
+    const char* prefix = nullptr, const char* color_seq = nullptr, 
+    bool flush = false)
 {
 PUSH_WARNINGS
 IGNORE_WFORMAT_SECURITY
+    if (color_seq) {
+        std::fputs(color_seq, stream);
+    }
     if (prefix) {
         std::fputs(prefix, stream);
     }
     std::vfprintf(stream, fmt, vlist);
-    std::fputs("\n", stream);
 
+    if (color_seq) {
+        std::fputs("\033[0m\n", stream);
+    } else {
+        std::fputs("\n", stream);
+    }
     if (flush) {
         std::fflush(stream);
     }
 POP_WARNINGS
 }
 
-static inline void log(std::FILE* stream,
-    const char* prefix, const char* prefix_color, 
-    const char* fmt, std::va_list vlist)
-{
-    log_to_stream(LOGFILE.get(), prefix, fmt, vlist, true);
-    log_to_stream(stream, LOG_COLOR_CONSOLE ? prefix_color : prefix, fmt, vlist);
-}
-
-#define GEN_LOG(stream, fmt, prefix, prefix_color)  \
-do {                                                \
-    std::va_list vlist;                             \
-    va_start(vlist, fmt);                           \
-    log(stream, prefix, prefix_color, fmt, vlist);  \
-    va_end(vlist);                                  \
+#define GEN_LOG(stream, fmt, prefix, color_seq)                                             \
+do {                                                                                        \
+    std::va_list vlist;                                                                     \
+    va_start(vlist, fmt);                                                                   \
+    log_to_stream(LOG.file.get(), fmt, vlist, prefix, nullptr, true);                       \
+    log_to_stream(stream, fmt, vlist, prefix, LOG.has_colors ? color_seq : nullptr, false); \
+    va_end(vlist);                                                                          \
 } while(0)
 
-
 void logERROR(const char* fmt, ...) {
-    GEN_LOG(stderr, fmt, "Error: ", "\033[1;31mError:\033[0m ");
+    GEN_LOG(stderr, fmt, "Error: ", "\033[1;31m");
 }
 
 void logWARNING(const char* fmt, ...) {
-    GEN_LOG(stderr, fmt, "Warning: ", "\033[1;33mWarning:\033[0m ");
+    GEN_LOG(stderr, fmt, "Warning: ", "\033[1;33m");
 }
 
 void logMESSAGE(const char* fmt, ...) {
     GEN_LOG(stdout, fmt, nullptr, nullptr);
 }
 
+void log_colorMESSAGE(const char* color_seq, const char* fmt, ...) {
+    GEN_LOG(stdout, fmt, nullptr, color_seq);
+}
+
 #ifndef NDEBUG
 void do_assert_msg(const char* expr, const char* file, int line, const char* fmt, ...) 
 {
     auto print_assert = [](const char* fmt, ...) {
-        GEN_LOG(stderr, fmt, "Assert failed: ", "\033[1;31mAssert failed:\033[0m ");
+        GEN_LOG(stderr, fmt, "Assert failed: ", "\033[1;31m");
     };
     print_assert("%s, %s (line %d)", expr, file, line);
     // additional message
