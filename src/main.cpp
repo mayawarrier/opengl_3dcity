@@ -39,7 +39,7 @@ int main(int argc, char* argv[])
         return -1;
     }
 
-    osm_data osmdata;
+    osm_gl_draw_data osmdata;
     if (!read_osmfile("assets/maps/london.osm", osmdata)) {
         logERROR("Failed to read OSM map file");
         return -1;
@@ -52,119 +52,84 @@ int main(int argc, char* argv[])
 
     //glEnable(GL_MULTISAMPLE);
     glEnable(GL_DEPTH_TEST);
-    glEnable(GL_PRIMITIVE_RESTART);
-    glPrimitiveRestartIndex(std::numeric_limits<uint32_t>::max());
+    //glEnable(GL_PRIMITIVE_RESTART);
+    //glPrimitiveRestartIndex(std::numeric_limits<uint32_t>::max());
 
     bool DRAW_WIREFRAME = false;
     bool DRAW_TRIANGLES = true;
 
     shaderfile::info shader_stages[2] = {
-        { "assets/shaders/vertex.vert", GL_VERTEX_SHADER },
-        { "assets/shaders/fragment.frag", GL_FRAGMENT_SHADER }
+        { "assets/shaders/vertex.glsl", GL_VERTEX_SHADER },
+        { "assets/shaders/fragment.glsl", GL_FRAGMENT_SHADER }
     };
     shader shader(shader_stages, 2);
     if (!shader.ok()) {
         return -1;
     }
 
-    //texture2d containertex("assets/textures/container.jpg");
-    //if (!containertex.ok()) {
-    //    return -1;
-    //}
-    //
-    //texture2d logotex("assets/textures/Opengl-logo.png");
-    //if (!logotex.ok()) {
-    //    return -1;
-    //}
-
     unsigned VBO_verts;
-
-    //unsigned EBO_lines;
-    //unsigned VAO_lines;
-    //unsigned VBO_way;
-
-    unsigned EBO_tris;
+    unsigned EBO_tris[NUM_TRI_TYPES];
     unsigned VAO_tris;
-    
-    //glGenVertexArrays(1, &VAO);
-    //glGenBuffers(1, &VBO);
 
     glGenBuffers(1, &VBO_verts);
-
-    //glGenVertexArrays(1, &VAO_lines);
-    //glGenBuffers(1, &EBO_lines);
-
+    glGenBuffers(NUM_TRI_TYPES, EBO_tris);
     glGenVertexArrays(1, &VAO_tris);
-    glGenBuffers(1, &EBO_tris);
-
-
-    //glBindBuffer(GL_ARRAY_BUFFER, VBO_verts);
-    //glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(float), verts.data(), GL_STATIC_DRAW);
-
-    //glGenBuffers(1, &EBO);
-    
-    //glBindVertexArray(VAO);
-    //{
-    //    glBindBuffer(GL_ARRAY_BUFFER, VBO);
-    //    glBufferData(GL_ARRAY_BUFFER, node_coords.size() * sizeof(float), node_coords.data(), GL_STATIC_DRAW);
-    //
-    //    //glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
-    //    //glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
-    //
-    //    // positions
-    //    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
-    //    glEnableVertexAttribArray(0);
-    //
-    //    // tex coords
-    //    //glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
-    //    //glEnableVertexAttribArray(1);
-    //}
-    //glBindVertexArray(0);
-
-    glBindBuffer(GL_ARRAY_BUFFER, VBO_verts);
-    glBufferData(GL_ARRAY_BUFFER, osmdata.data.verts.size() * sizeof(float), osmdata.data.verts.data(), GL_STATIC_DRAW);
-
-    //glBindVertexArray(VAO_lines);
-    //{
-    //    glBindBuffer(GL_ARRAY_BUFFER, VBO_verts);
-    //
-    //    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO_lines);
-    //    glBufferData(GL_ELEMENT_ARRAY_BUFFER, osmdata.line_indices.size() * sizeof(uint32_t), osmdata.line_indices.data(), GL_STATIC_DRAW);
-    //
-    //    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
-    //    glEnableVertexAttribArray(0);
-    //}
-    //glBindVertexArray(0);
-
 
     glBindVertexArray(VAO_tris);
     {
         glBindBuffer(GL_ARRAY_BUFFER, VBO_verts);
+        glBufferData(GL_ARRAY_BUFFER, osmdata.verts.size() * sizeof(osm_gl_draw_data::vertex), osmdata.verts.data(), GL_STATIC_DRAW);
 
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO_tris);
-        glBufferData(GL_ELEMENT_ARRAY_BUFFER, osmdata.data.tri_indices.size() * sizeof(uint32_t), osmdata.data.tri_indices.data(), GL_STATIC_DRAW);
+        for (int i = 0; i < NUM_TRI_TYPES; ++i)
+        {
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO_tris[i]);
+            glBufferData(GL_ELEMENT_ARRAY_BUFFER, osmdata.tris[i].size() * sizeof(osm_gl_draw_data::tri), osmdata.tris[i].data(), GL_STATIC_DRAW);
+        }
 
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+
         glEnableVertexAttribArray(0);
+        glEnableVertexAttribArray(1);
     }
     glBindVertexArray(0);
 
 
     //int texture0_loc = shader.get_uniform_loc("texture0");
     //int texture1_loc = shader.get_uniform_loc("texture1");
-    int mvp_loc = shader.get_uniform_loc("MVP");
-    int color_loc = shader.get_uniform_loc("in_color");
+    int model_loc = shader.get_uniform_loc("model");
+    int view_loc = shader.get_uniform_loc("view");
+    int projection_loc = shader.get_uniform_loc("projection");
+    int light_pos_loc = shader.get_uniform_loc("light_pos");
+    int light_color_loc = shader.get_uniform_loc("light_color");
+    int obj_color_loc = shader.get_uniform_loc("object_color");
 
-
-    edit_camera camera;
+    shader.use();
 
     glm::mat4 projection = glm::perspective(glm::radians(45.0f), wnd.aspect_ratio(), 0.1f, 50000.0f);
     //glm::mat4 projection = glm::ortho(-1000.f, 1000.f, -1000.f, 1000.f, 0.001f, 1000.f);
+    glUniformMatrix4fv(projection_loc, 1, GL_FALSE, glm::value_ptr(projection));
 
+    glm::mat4 model(1.0f);
+    model = glm::rotate(model, glm::radians(-90.f), glm::vec3(1.f, 0.f, 0.f));
+    glUniformMatrix4fv(model_loc, 1, GL_FALSE, glm::value_ptr(model));
+
+    float avgX = 0.f, avgY = 0.f, maxZ = 0.f;
+    for (const auto& vert : osmdata.verts) {
+        avgX += vert.pos[0];
+        avgY += vert.pos[1];
+        if (vert.pos[2] > maxZ) {
+            maxZ = vert.pos[2];
+        }
+    }
+    auto light_pos = glm::vec3(avgX / osmdata.verts.size(), avgY / osmdata.verts.size(), 1.5 * maxZ);
+    light_pos = model * glm::vec4(light_pos, 1.f);
+
+    glUniform3f(light_pos_loc, light_pos.x, light_pos.y, light_pos.z);
+    glUniform3f(light_color_loc, 1.0f, 1.f, 1.f);
+
+    edit_camera camera;
     uint64_t last_ticks = 0;
-
-    //SDL_SetRelativeMouseMode(SDL_TRUE);
-
     bool quit = false;
     while (!quit)
     {
@@ -204,14 +169,13 @@ int main(int argc, char* argv[])
         glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         
-        shader.use();
+        //shader.use();
         //shader.bind_texture(texture0_loc, 0, containertex);
         //shader.bind_texture(texture1_loc, 1, logotex);
 
-        glm::mat4 model(1.0f);
-        model = glm::rotate(model, glm::radians(-90.f), glm::vec3(1.f, 0.f, 0.f));
-        glm::mat4 mvp = projection * camera.view() * model;
-        glUniformMatrix4fv(mvp_loc, 1, GL_FALSE, glm::value_ptr(mvp));
+        glUniformMatrix4fv(view_loc, 1, GL_FALSE, glm::value_ptr(camera.view()));
+
+        
 
         //glBindVertexArray(VAO);
         //{
@@ -223,24 +187,54 @@ int main(int argc, char* argv[])
         // Draw meshes
         glBindVertexArray(VAO_tris);
         {
-            for (const auto& colr_range: osmdata.color_ranges)
+            for (int i = 0; i < NUM_TRI_TYPES; ++i)
             {
-                if (DRAW_TRIANGLES) 
-                {
-                    glUniform4f(color_loc, colr_range.color.r, colr_range.color.g, colr_range.color.b, colr_range.color.a);
-                    glDrawElements(GL_TRIANGLES, colr_range.count * 3, GL_UNSIGNED_INT, (void*)(colr_range.startidx * sizeof(uint32_t) * 3));
+                if (osmdata.tris[i].empty()) {
+                    continue;
                 }
 
+                glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO_tris[i]);
+
+                if (DRAW_TRIANGLES) 
+                {
+                    glm::vec3 colr;
+                    switch (i) {
+                    case TRI_TYPE_BUILDING: colr = glm::vec3(0.5f, 0.5f, 0.5f); break;
+                    case TRI_TYPE_HIGHWAY:  colr = glm::vec3(0.1f, 0.1f, 0.1f); break;
+                    default: assert(false);
+                        break;
+                    }
+                    glUniform3f(obj_color_loc, colr.r, colr.g, colr.b);
+                    glDrawElements(GL_TRIANGLES, osmdata.tris[i].size() * 3, GL_UNSIGNED_INT, (void*)0);
+                }
                 if (DRAW_WIREFRAME)
                 {
                     glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-                    glUniform4f(color_loc, 1.0f, 0, 0, 1.0f);
-                    glDrawElements(GL_TRIANGLES, colr_range.count * 3, GL_UNSIGNED_INT, (void*)(colr_range.startidx * sizeof(uint32_t) * 3));
+                    glUniform3f(obj_color_loc, 1.0f, 0, 0);
+                    glDrawElements(GL_TRIANGLES, osmdata.tris[i].size() * 3, GL_UNSIGNED_INT, (void*)0);
                     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
                 }
             }
         }
         glBindVertexArray(0);
+
+
+        //for (const auto& colr_range: osmdata.color_ranges)
+            //{
+            //    if (DRAW_TRIANGLES) 
+            //    {
+            //        glUniform3f(obj_color_loc, colr_range.color.r, colr_range.color.g, colr_range.color.b);
+            //        glDrawElements(GL_TRIANGLES, colr_range.count * 3, GL_UNSIGNED_INT, (void*)(colr_range.startidx * sizeof(uint32_t) * 3));
+            //    }
+
+            //    if (DRAW_WIREFRAME)
+            //    {
+            //        glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+            //        glUniform4f(obj_color_loc, 1.0f, 0, 0, 1.0f);
+            //        glDrawElements(GL_TRIANGLES, colr_range.count * 3, GL_UNSIGNED_INT, (void*)(colr_range.startidx * sizeof(uint32_t) * 3));
+            //        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+            //    }
+            //}
 
         //glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 

@@ -108,7 +108,7 @@ struct bldg_comp_builder
 
     template <class ...TComps>
     bool build_all(const osm_mesh_object_db* obj_db,
-        osm_mesh_comp_db<TComps...>* comp_db, std::vector<draw_datad>& out_drawdata)
+        osm_mesh_comp_db<TComps...>* comp_db, std::vector<osm_tri_datad>& out_drawdata)
     {
         auto& bldgs = comp_db->comps_vec<building_comp>();
         return do_build_all(obj_db, bldgs, out_drawdata);
@@ -116,7 +116,7 @@ struct bldg_comp_builder
 
 private:
     bool do_build_all(const osm_mesh_object_db* obj_db, 
-        const std::vector<building_comp>& bldgs, std::vector<draw_datad>& out_drawdata);
+        const std::vector<building_comp>& bldgs, std::vector<osm_tri_datad>& out_drawdata);
 
     int get_building_type(const osmium::TagList& tags) const
     {

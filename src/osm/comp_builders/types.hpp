@@ -115,12 +115,12 @@ concept MeshCompBuilder = requires(
     osm_mesh_comp_db<TComps...>* comp_db,
     osm_mesh_object::comp_info_vec_t& comps,
     const osm_mesh_object_db* obj_db,
-    std::vector<draw_datad>& out_drawdata)
+    std::vector<osm_tri_datad>& out_tridata)
 {
     typename T::comp_type;
     { builder.comp_type_name() } -> std::convertible_to<const char*>;
     { builder.add_comp(mesh_obj_idx, obj, comp_db, comps) } -> std::same_as<bool>;
-    { builder.build_all(obj_db, comp_db, out_drawdata) } -> std::same_as<bool>;
+    { builder.build_all(obj_db, comp_db, out_tridata) } -> std::same_as<bool>;
 };
 
 // Each comp builder gets access to all comps for all objects, 

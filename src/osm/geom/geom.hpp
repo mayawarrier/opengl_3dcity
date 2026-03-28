@@ -203,9 +203,6 @@ bool check_tris_oriented(const auto& verts,
     return true;
 }
 
-// Polygon templates below are explicitly instantiated
-// as they generate a lot of code or require heavy headers.
-
 // Fraction of outer multipolygon covered by inner multipolygons.
 // The inner multipolygons must be fully covered by the outer multipolygon.
 // \return value in [0, 1].
@@ -222,15 +219,13 @@ template <class TPoly> requires RingedPolygon<TPoly>
 std::vector<uint32_t> polygon_triangulate(const TPoly& polygon);
 
 // Triangulate a thick polyline.
-void polyline_triangulate(std::span<const glm::dvec2> polyline, double width, draw_datad& dd, double eps = 1e-9);
+// todo: ideally agnostic of osm types
+void polyline_triangulate(std::span<const glm::dvec2> polyline,
+    double width, osm_tri_datad& dd, osm_tri_type tri_type, double eps = 1e-9);
 
 // extern templates produce bogus VCR001 warnings, but there's no way to disable them. sigh
-extern template double multipoly_coverage<osm_area::multipoly_t>(
-    std::span<const osm_area::multipoly_t*>, const osm_area::multipoly_t&);
-
-extern template bool multipoly_covered_by<osm_area::multipoly_t>(
-    const osm_area::multipoly_t&, const osm_area::multipoly_t&, double);
-
+extern template double multipoly_coverage<osm_area::multipoly_t>(std::span<const osm_area::multipoly_t*>, const osm_area::multipoly_t&);
+extern template bool multipoly_covered_by<osm_area::multipoly_t>(const osm_area::multipoly_t&, const osm_area::multipoly_t&, double);
 extern template std::vector<uint32_t> polygon_triangulate<osm_area::poly_t>(const osm_area::poly_t&);
 
 #endif

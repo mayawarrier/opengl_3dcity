@@ -158,7 +158,7 @@ public:
     }
 
     // Build meshes.
-    bool build(std::vector<draw_datad>& out_drawdata)
+    bool build(osm_gl_draw_data& out_data)
     {
         buffer<const osm_mesh_object*> obj_ptrs(m_obj_db.objects.size(), buffer_overwrite);
         for (size_t i = 0; i < m_obj_db.objects.size(); ++i) {
@@ -171,12 +171,13 @@ public:
         m_obj_db.vert_scale = 1.0 / std::cos(glm::radians(center_lat));
 
         bool ret = true;
+        std::vector<osm_tri_datad> tri_data;
         std::apply([&](auto&... builders) 
         {
             auto do_build = [&](auto& builder) 
             {
                 const char* comp_type = builder.comp_type_name();
-                if (!builder.build_all(&m_obj_db, &m_comp_db, out_drawdata)) {
+                if (!builder.build_all(&m_obj_db, &m_comp_db, tri_data)) {
                     logERROR("Failed to build %s meshes", comp_type);
                     ret = false;
                 }
@@ -185,7 +186,76 @@ public:
         }, 
             m_comp_builders);
 
-        return ret;
+        if (!ret) {
+            return false;
+        }
+
+        osm_tri_dataf df;
+        for (auto& dd : tri_data) {
+            df.add_tridata(dd);
+        }
+
+        std::vector<glm::fvec3> tri_normals(df.tris().size());
+        std::vector<std::vector<uint32_t>> vert2tris(df.verts().size());
+
+        for (uint32_t itri = 0; itri < uint32_t(df.tris().size()); ++itri) 
+        {
+            auto& tri = df.tris()[itri];
+            auto& indices = tri.vert_idxs;
+
+            auto v01 = df.verts()[indices[1]] - df.verts()[indices[0]];
+            auto v02 = df.verts()[indices[2]] - df.verts()[indices[0]];
+            auto normal = glm::normalize(glm::cross(v01, v02));
+            tri_normals[itri] = normal;
+
+            for (int i = 0; i < 3; ++i) {
+                vert2tris[indices[i]].push_back(itri);
+            }
+        }
+        
+        const float SMOOTH_THRESH = std::cos(glm::radians(20.0f));
+
+        std::vector<glm::fvec3> tri_corner_normals(df.tris().size() * 3);
+        for (uint32_t itri = 0; itri < uint32_t(df.tris().size()); ++itri)
+        {
+            auto tri_type = df.tris()[itri].type;
+            auto& indices = df.tris()[itri].vert_idxs;
+            
+            for (int i = 0; i < 3; ++i) 
+            {
+                auto& corner_normal = tri_corner_normals[3 * itri + i];
+                for (uint32_t iadjface : vert2tris[indices[i]]) 
+                {
+                    auto adj_tri_type = df.tris()[iadjface].type;
+                    auto& adj_normal = tri_normals[iadjface];
+
+                    if (adj_tri_type == tri_type && 
+                        glm::dot(adj_normal, tri_normals[itri]) >= SMOOTH_THRESH) {
+                        corner_normal += adj_normal;
+                    }
+                }
+                corner_normal = glm::normalize(corner_normal);
+            }
+        }
+
+        osm_gl_draw_data result;
+        for (uint32_t itri = 0; itri < uint32_t(df.tris().size()); ++itri) 
+        {
+            auto tri_type = df.tris()[itri].type;
+            auto& og_indices = df.tris()[itri].vert_idxs;
+
+            uint32_t verts_idx = uint32_t(result.verts.size());
+            for (int i = 0; i < 3; ++i) 
+            {
+                auto& vert = df.verts()[og_indices[i]];
+                auto& normal = tri_corner_normals[3 * itri + i];
+                result.verts.push_back({ vert.x, vert.y, vert.z, normal.x, normal.y, normal.z });
+            }
+            result.tris[tri_type].push_back({ verts_idx, verts_idx + 1, verts_idx + 2 });
+        }
+
+        out_data = std::move(result);
+        return true;
     }
 
 private:

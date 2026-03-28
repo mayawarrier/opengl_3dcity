@@ -174,14 +174,14 @@ static std::vector<way_net::path> get_all_paths(way_net& network)
     return ret;
 }
 
-static void gen_path_drawdata(draw_datad& dd, const way_net::path& path, double eps)
+static void gen_path_drawdata(osm_tri_datad& dd, const way_net::path& path, double eps)
 {
     std::vector<glm::dvec2> verts(path.nodes.size());
     for (size_t i = 0; i < path.nodes.size(); ++i) {
         verts[i] = path.nodes[i].vert();
     }
     // todo: use each way's width when triangulating the polyline
-    polyline_triangulate(verts, path.nodes[1].in_way->width, dd, eps);
+    polyline_triangulate(verts, path.nodes[1].in_way->width, dd, TRI_TYPE_HIGHWAY, eps);
 }
 
 //static bool gen_outline_drawdata(draw_datad& dd, const std::vector<outline_node>& outline)
@@ -215,7 +215,7 @@ static void gen_path_drawdata(draw_datad& dd, const way_net::path& path, double 
 
 bool highway_comp_builder::do_build_all(const osm_mesh_object_db* obj_db, 
     const std::vector<highway_comp>& highways, const std::vector<building_comp>& buildings, 
-    std::vector<draw_datad>& out_drawdata)
+    std::vector<osm_tri_datad>& out_tridata)
 {
     static constexpr double eps = 1e-9;
     
@@ -260,14 +260,11 @@ bool highway_comp_builder::do_build_all(const osm_mesh_object_db* obj_db,
         all_paths = get_all_paths(network);
     });
 
-    draw_datad footpath_dd { 
-        .name = "footpaths", 
-        .color = glm::vec4(0.5f, 0.5f, 0.5f, 1.0f) 
-    };
-    draw_datad street_dd { 
-        .name = "streets", 
-        .color = glm::vec4(0.25f, 0.25f, 0.25f, 1.0f) 
-    };
+    osm_tri_datad footpath_dd;
+    // glm::vec4(0.5f, 0.5f, 0.5f, 1.0f) 
+    osm_tri_datad street_dd;
+    // (0.25f, 0.25f, 0.25f, 1.0f)
+
     //draw_datad debug_dd { 
     //    .name = "debug", 
     //    .color = glm::vec4(1.0f, 0.f, 0.f, 1.f) 
@@ -296,7 +293,7 @@ bool highway_comp_builder::do_build_all(const osm_mesh_object_db* obj_db,
     uint32_t num_verts = street_dd.num_verts() + footpath_dd.num_verts();
 
     //drawdata.push_back(std::move(footpath_dd));
-    out_drawdata.push_back(std::move(street_dd));
+    out_tridata.push_back(std::move(street_dd));
     //drawdata.push_back(std::move(debug_dd));
 
     auto tend = clk::now();

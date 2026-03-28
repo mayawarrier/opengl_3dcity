@@ -19,7 +19,7 @@
 #include <set>
 #endif
 
-#include "drawdata.hpp"
+#include "draw_data.hpp"
 #include "../utils.hpp"
 
 
@@ -300,5 +300,69 @@ template <class TMultiPoly>
 concept RingedMultiPolygon = 
     std::ranges::contiguous_range<TMultiPoly> && 
     RingedPolygon<std::ranges::range_value_t<TMultiPoly>>;
+
+
+struct osm_tri
+{
+    glm::u32vec3 vert_idxs;
+    osm_tri_type type;
+};
+
+template <class TVert>
+struct osm_tri_data
+{
+    uint32_t add_vertex(const glm::tvec3<TVert>& vert) {
+        uint32_t idx = num_verts();
+        m_verts.push_back(vert);
+        return idx;
+    }
+
+    void add_triangle(glm::u32vec3 vert_idxs, osm_tri_type type) {
+        m_tris.push_back({ vert_idxs, type });
+    }
+
+    void add_triangle_w_offset(glm::u32vec3 vert_idxs, uint32_t offset, osm_tri_type type) {
+        m_tris.push_back({ vert_idxs + glm::u32vec3(offset), type });
+    }
+
+    template <class OtherTVert>
+    void add_tridata(const osm_tri_data<OtherTVert>& other)
+    {
+        uint32_t vert_offset = num_verts();
+        for (auto& vert : other.verts()) {
+            add_vertex(glm::tvec3<TVert>(TVert(vert.x), TVert(vert.y), TVert(vert.z)));
+        }
+        for (auto& tri : other.tris()) {
+            add_triangle_w_offset(tri.vert_idxs, vert_offset, tri.type);
+        }
+    }
+
+    uint32_t num_verts() const { return uint32_t(m_verts.size()); }
+    uint32_t num_tris() const { return uint32_t(m_tris.size()); }
+
+    const std::vector<glm::tvec3<TVert>>& verts() const { return m_verts; }
+    const std::vector<osm_tri>& tris() const { return m_tris; }
+
+    struct positions
+    {
+        uint32_t nverts;
+        uint32_t ntris;
+    };
+    positions position() const {
+        return { num_verts(), num_tris() };
+    }
+    void rollback(const positions& pos) {
+        assert(pos.nverts <= m_verts.size() && pos.ntris <= m_tris.size());
+        m_verts.resize(pos.nverts);
+        m_tris.resize(pos.ntris);
+    }
+
+private:
+    std::vector<glm::tvec3<TVert>> m_verts;
+    std::vector<osm_tri> m_tris;
+};
+
+using osm_tri_dataf = osm_tri_data<float>;
+using osm_tri_datad = osm_tri_data<double>;
 
 #endif

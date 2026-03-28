@@ -41,8 +41,6 @@ void bldg_comp_builder::set_bldg_heights(const osmium::TagList& tags, building_c
     comp.roof_ht = -1.0; // not supported yet
 }
 
-
-
 // Maps building parts to their parent buildings.
 class bldg_part_mapper
 {
@@ -133,8 +131,7 @@ private:
                     }
                 }
             }
-            // Logged separately since they are likely to be unmapped 
-            // simply due to missing data near the boundary
+            // Logged separately since these are likely unmapped only because of missing data
             if (!boundary_uparts.empty()) {
                 logWARNING("Unmapped parts near or at map boundary");
                 for (const auto* part_comp : boundary_uparts) {
@@ -241,15 +238,15 @@ public:
             double part_area = multipoly_area(part_osm.polys);
             std::erase_if(cand_bldgs, [&](const auto* bldg) 
             {
+                // larger tolerance for larger polygons
                 static constexpr double AREA_TOL_FRAC = 1e-4;
                 static constexpr double MIN_TOL = 0.1;
 
                 auto& bldg_osm = m_obj_db->get<osm_area>(bldg->osm_obj_idx);
                 double bldg_area = multipoly_area(bldg_osm.polys);
-                double area_tol = AREA_TOL_FRAC * (part_area + bldg_area);
+                double area_tol = std::max(AREA_TOL_FRAC * (part_area + bldg_area), MIN_TOL);
 
-                double tol = std::max(area_tol, MIN_TOL);
-                return !multipoly_covered_by(part_osm.polys, bldg_osm.polys, tol);
+                return !multipoly_covered_by(part_osm.polys, bldg_osm.polys, area_tol);
             });
 
             m_logger.log_stage(log, m_logger.STAGE_COVER, cand_bldgs);
@@ -383,38 +380,34 @@ private:
 };
 
 
-static inline void mesh_add_triangle(draw_datad& mesh, glm::u32vec3 indices, bool reverse_winding)
-{
-    if (reverse_winding) {
-        mesh.add_triangle(indices[0], indices[2], indices[1]);
-    } else {
-        mesh.add_triangle(indices[0], indices[1], indices[2]);
-    }
+static inline glm::u32vec3 tri_indices(glm::u32vec3 indices, bool rev_winding) {
+    return rev_winding ? glm::u32vec3(indices[0], indices[2], indices[1]) : indices;
 }
 
-static uint32_t mesh_add_polygon(draw_datad& mesh, const auto& nodes,
-    std::span<const uint32_t> indices, double height, bool reverse_winding = false)
+static uint32_t dd_add_polygon(osm_tri_datad& dd, const auto& nodes,
+    std::span<const uint32_t> indices, double height, bool rev_winding = false)
 {
-    uint32_t vert_startidx = uint32_t(mesh.num_verts());
+    uint32_t vert_startidx = dd.num_verts();
     for (const auto& node : nodes) {
-        mesh.add_vertex(vert_x(node), vert_y(node), height);
+        dd.add_vertex({ vert_x(node), vert_y(node), height });
     }
-
     for (size_t i = 0; i < indices.size(); i += 3)
     {
-        uint32_t idx0 = indices[i] + vert_startidx;
-        uint32_t idx1 = indices[i + 1] + vert_startidx;
-        uint32_t idx2 = indices[i + 2] + vert_startidx;
-
-        mesh_add_triangle(mesh, { idx0, idx1, idx2 }, reverse_winding);
+        uint32_t vidx0 = indices[i] + vert_startidx;
+        uint32_t vidx1 = indices[i + 1] + vert_startidx;
+        uint32_t vidx2 = indices[i + 2] + vert_startidx;
+        auto indices = tri_indices({ vidx0, vidx1, vidx2 }, rev_winding);
+        dd.add_triangle(indices, TRI_TYPE_BUILDING);
     }
     return vert_startidx;
 }
 
-// \param verts_ccw True if the vertices are in CCW order.
-static void mesh_add_sides(draw_datad& mesh, uint32_t bot_verts_idx,
-    uint32_t top_verts_idx, uint32_t num_verts, bool verts_ccw = true)
+static void dd_add_ring_sides(osm_tri_datad& dd, uint32_t num_verts,
+    uint32_t bot_verts_idx, uint32_t top_verts_idx, orient_t ring_orient)
 {
+    assert(ring_orient != ORIENT_COLL);
+
+    bool rev_winding = (ring_orient == ORIENT_CCW);
     for (uint32_t icur = 0; icur < num_verts; ++icur)
     {
         uint32_t inext = (icur + 1) % num_verts;
@@ -424,12 +417,14 @@ static void mesh_add_sides(draw_datad& mesh, uint32_t bot_verts_idx,
             top_verts_idx + icur,
             top_verts_idx + inext,
         };
-        mesh_add_triangle(mesh, { quad[0], quad[2], quad[3] }, verts_ccw);
-        mesh_add_triangle(mesh, { quad[0], quad[3], quad[1] }, verts_ccw);
+        auto indices1 = tri_indices({ quad[0], quad[3], quad[2] }, rev_winding);
+        auto indices2 = tri_indices({ quad[0], quad[1], quad[3] }, rev_winding);
+        dd.add_triangle(indices1, TRI_TYPE_BUILDING);
+        dd.add_triangle(indices2, TRI_TYPE_BUILDING);
     }
 }
 
-static bool generate_comp_mesh(draw_datad& mesh, const building_comp& comp, const osm_mesh_object_db* obj_db)
+static void generate_comp_mesh(osm_tri_datad& dd, const building_comp& comp, const osm_mesh_object_db* obj_db)
 {
     auto& obj = obj_db->get<osm_mesh_object>(comp.mesh_obj_idx);
     auto& obj_osm = obj_db->get<osm_area>(obj.osm_obj_idx);
@@ -439,34 +434,32 @@ static bool generate_comp_mesh(draw_datad& mesh, const building_comp& comp, cons
         auto tri_indices = polygon_triangulate(poly);
         auto poly_nodes = osm_area::poly_nodes(poly);
 
+        // how does this assert pass?!
         assert(check_tris_oriented(poly_nodes, tri_indices, ORIENT_CCW));
 
-        uint32_t bot_verts_idx = mesh_add_polygon(mesh, poly_nodes, tri_indices, comp.ht_btm * obj_db->vert_scale);
-        uint32_t top_verts_idx = mesh_add_polygon(mesh, poly_nodes, tri_indices, comp.ht_top * obj_db->vert_scale, true);
-
-        uint32_t vert_offset = 0;
+        uint32_t bot_verts_idx = dd_add_polygon(dd, poly_nodes, tri_indices, comp.ht_btm * obj_db->vert_scale);
+        uint32_t top_verts_idx = dd_add_polygon(dd, poly_nodes, tri_indices, comp.ht_top * obj_db->vert_scale, true);
         
         auto& outer_ring = poly[0];
-        auto outer_size = uint32_t(outer_ring.size());
-        mesh_add_sides(mesh, bot_verts_idx, top_verts_idx, outer_size);
-        vert_offset += outer_size;
-
+        uint32_t outer_size = uint32_t(outer_ring.size());
+        dd_add_ring_sides(dd, outer_size, bot_verts_idx, top_verts_idx, ORIENT_CCW);
+        
+        uint32_t vert_offset = outer_size;
         for (size_t ihole = 1; ihole < poly.size(); ++ihole)
         {
             auto& hole = poly[ihole];
-            auto hole_size = uint32_t(hole.size());
-            auto hole_bot_idx = bot_verts_idx + vert_offset;
-            auto hole_top_idx = top_verts_idx + vert_offset;
+            uint32_t hole_size = uint32_t(hole.size());
+            uint32_t hole_bot_idx = bot_verts_idx + vert_offset;
+            uint32_t hole_top_idx = top_verts_idx + vert_offset;
 
-            mesh_add_sides(mesh, hole_bot_idx, hole_top_idx, hole_size, false);
+            dd_add_ring_sides(dd, hole_size, hole_bot_idx, hole_top_idx, ORIENT_CW);
             vert_offset += hole_size;
         }
     }
-    return true;
 }
 
 bool bldg_comp_builder::do_build_all(const osm_mesh_object_db* obj_db, 
-    const std::vector<building_comp>& all_comps, std::vector<draw_datad>& out_drawdata)
+    const std::vector<building_comp>& all_comps, std::vector<osm_tri_datad>& out_tridata)
 {
     auto tbegin = clk::now();
 
@@ -494,18 +487,7 @@ bool bldg_comp_builder::do_build_all(const osm_mesh_object_db* obj_db,
         }
     });
 
-    const glm::vec4 building_color(0.85f, 0.75f, 0.65f, 1.0f);
-
-    size_t num_verts = 0, num_tris = 0;
-    auto add_drawdata = [&]<class String>(draw_datad&& dd, String&& name) 
-    {
-        dd.color = building_color;
-        dd.name = std::forward<String>(name);
-        num_verts += dd.num_verts();
-        num_tris += dd.num_tris();
-
-        out_drawdata.push_back(std::move(dd));
-    };
+    osm_tri_datad dd;
 
     auto comp_osm_id = [&](const building_comp* comp) {
         auto& obj = obj_db->get<osm_mesh_object>(comp->mesh_obj_idx);
@@ -517,36 +499,19 @@ bool bldg_comp_builder::do_build_all(const osm_mesh_object_db* obj_db,
         auto& unmapped_parts = part_mapper.unmapped_parts();
         auto& bldg2parts = part_mapper.bldg2parts();
 
-        auto add_part_mesh = [&](const building_comp* part_comp) {
-            draw_datad dd;
-            if (generate_comp_mesh(dd, *part_comp, obj_db)) {
-                add_drawdata(std::move(dd), "part " + std::to_string(comp_osm_id(part_comp)));
-            }
-        };
-
         for (auto* bldg_comp : bldg_comps)
         {
             auto& bldg = obj_db->get<osm_mesh_object>(bldg_comp->mesh_obj_idx);
             auto& bldg_osm = obj_db->get<osm_area>(bldg.osm_obj_idx);
-            auto bldg_osm_id = obj_db->obj_osm_id(bldg);
 
-            auto add_bldg_mesh = [&]() {
-                draw_datad dd;
-                if (generate_comp_mesh(dd, *bldg_comp, obj_db)) {
-                    auto name = bldg.name.empty() ? "bldg " + std::to_string(bldg_osm_id) : bldg.name;
-                    add_drawdata(std::move(dd), std::move(name));
-                }
-            };
-            
             auto bldg_parts_it = bldg2parts.find(bldg_comp);
             if (bldg_parts_it == bldg2parts.end()) {
-                add_bldg_mesh();
+                generate_comp_mesh(dd, *bldg_comp, obj_db);
             } 
             else {
+                // due to mapper error, parts often do not cover the entire parent
+                // try to check if the coverage is high enough to skip drawing the parent
                 bool draw_parts_only = true;
-
-                // Due to mapper error, parts often do not cover the entire parent.
-                // Try to check if the coverage is close enough to skip drawing the parent.
                 if (bldg_comp->has_ht_top && !bldg_comp->parts_only)
                 {
                     std::vector<const osm_area::multipoly_t*> part_polys;
@@ -561,14 +526,14 @@ bool bldg_comp_builder::do_build_all(const osm_mesh_object_db* obj_db,
                 }
 
                 if (!draw_parts_only) {
-                    add_bldg_mesh();
+                    generate_comp_mesh(dd, *bldg_comp, obj_db);
                 }
                 for (auto* part_comp : bldg_parts_it->second) {
-                    add_part_mesh(part_comp);
+                    generate_comp_mesh(dd, *part_comp, obj_db);
                 }
 
                 logMESSAGE("Parts for building %lld %s %s", 
-                    bldg_osm_id,
+                    bldg_osm.id,
                     bldg.name.empty() ? "" : ("(" + bldg.name + ")").c_str(),
                     draw_parts_only ? "" : "(with outline)");
 
@@ -586,14 +551,15 @@ bool bldg_comp_builder::do_build_all(const osm_mesh_object_db* obj_db,
         }
 
         for (auto* part_comp : unmapped_parts) {
-            add_part_mesh(part_comp);
+            generate_comp_mesh(dd, *part_comp, obj_db);
         }
     });
 
     auto tend = clk::now();
     logMESSAGE("Generated %u tris and %u vertices in %s",
-        num_tris, num_verts, clock_dur_str(tend - tbegin).c_str());
+        dd.num_tris(), dd.num_verts(), clock_dur_str(tend - tbegin).c_str());
 
+    out_tridata.push_back(std::move(dd));
     return true;
 }
 

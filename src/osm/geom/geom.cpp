@@ -228,7 +228,7 @@ std::vector<uint32_t> polygon_triangulate(const TPoly& polygon)
 
 template std::vector<uint32_t> polygon_triangulate<osm_area::poly_t>(const osm_area::poly_t&);
 
-static void segment_triangulate(glm::dvec2 p0, glm::dvec2 p1, double width, draw_datad& dd)
+static void segment_triangulate(glm::dvec2 p0, glm::dvec2 p1, double width, osm_tri_datad& dd, osm_tri_type type)
 {
     glm::dvec2 norm = (width / 2.0) * glm::normalize(vec_perp(p1 - p0));
 
@@ -238,8 +238,8 @@ static void segment_triangulate(glm::dvec2 p0, glm::dvec2 p1, double width, draw
     dd.add_vertex({ p1 + norm, 0.0 });
     dd.add_vertex({ p1 - norm, 0.0 });
 
-    dd.add_triangle_w_offset(0, 3, 1, vert_startidx);
-    dd.add_triangle_w_offset(3, 2, 1, vert_startidx);
+    dd.add_triangle_w_offset({ 0, 3, 1 }, vert_startidx, type);
+    dd.add_triangle_w_offset({ 3, 2, 1 }, vert_startidx, type);
 }
 
 struct stitch_edge
@@ -255,7 +255,7 @@ struct stitch_edge
 
 // Rare case when corner is really a straight line segment.
 static stitch_edge degen_corner_triangulate(glm::dvec2 p0, glm::dvec2 p1, glm::dvec2 p2,
-    const stitch_edge& stitch_edge, double width, draw_datad& dd, double eps)
+    const stitch_edge& stitch_edge, double width, osm_tri_datad& dd, osm_tri_type type, double eps)
 {
     glm::dvec2 norm = (width / 2.0) * glm::normalize(vec_perp(p1 - p0));
 
@@ -275,8 +275,8 @@ static stitch_edge degen_corner_triangulate(glm::dvec2 p0, glm::dvec2 p1, glm::d
         bot_prev_idx = dd.add_vertex({ p0 - norm, 0.0 });
     }
 
-    dd.add_triangle(top_prev_idx, bot_next_idx, top_next_idx);
-    dd.add_triangle(bot_next_idx, top_prev_idx, bot_prev_idx);
+    dd.add_triangle({ top_prev_idx, bot_next_idx, top_next_idx }, type);
+    dd.add_triangle({ bot_next_idx, top_prev_idx, bot_prev_idx }, type);
 
     return {
         .orient = prev_is_ccw ? ORIENT_CCW : ORIENT_CW,
@@ -286,7 +286,7 @@ static stitch_edge degen_corner_triangulate(glm::dvec2 p0, glm::dvec2 p1, glm::d
 }
 
 static stitch_edge corner_triangulate(glm::dvec2 p0, glm::dvec2 p1, glm::dvec2 p2, 
-    const stitch_edge& stitch_edge, double width, draw_datad& dd, double eps)
+    const stitch_edge& stitch_edge, double width, osm_tri_datad& dd, osm_tri_type type, double eps)
 {
     glm::dvec2 norm1 = (width / 2.0) * glm::normalize(vec_perp(p1 - p0));
     glm::dvec2 norm2 = (width / 2.0) * glm::normalize(vec_perp(p2 - p1));
@@ -294,7 +294,7 @@ static stitch_edge corner_triangulate(glm::dvec2 p0, glm::dvec2 p1, glm::dvec2 p
     // point towards outward bend
     orient_t orient = ::orient(p0, p1, p2);
     if (orient == ORIENT_COLL) {
-        return degen_corner_triangulate(p0, p1, p2, stitch_edge, width, dd, eps);
+        return degen_corner_triangulate(p0, p1, p2, stitch_edge, width, dd, type, eps);
     }
     else if (orient == ORIENT_CCW) {
         norm1 = -norm1;
@@ -307,7 +307,7 @@ static stitch_edge corner_triangulate(glm::dvec2 p0, glm::dvec2 p1, glm::dvec2 p
 
     auto inter_result = seg_intersect({ outer_p0, outer_p1_seg1 }, { outer_p2, outer_p1_seg2 }, eps);
     if (inter_result.type == SEG_INTER_PARALLEL || inter_result.type == SEG_INTER_COINCIDENT) {
-        return degen_corner_triangulate(p0, p1, p2, stitch_edge, width, dd, eps);
+        return degen_corner_triangulate(p0, p1, p2, stitch_edge, width, dd, type, eps);
     }
 
     glm::dvec2 norm_mid = inter_result.point - p1;
@@ -337,18 +337,18 @@ static stitch_edge corner_triangulate(glm::dvec2 p0, glm::dvec2 p1, glm::dvec2 p
     bool remove_mid_tri = angle_bw(outer_p1_seg2 - inner_mid, outer_p1_seg1 - inner_mid) < glm::radians(20.0);
 
     // Segment 1
-    dd.add_triangle(inner_p0_idx, inner_mid_idx, outer_p0_idx);
-    dd.add_triangle(outer_p0_idx, inner_mid_idx, (remove_mid_tri ? outer_p1_seg2_idx : outer_p1_seg1_idx));
+    dd.add_triangle({ inner_p0_idx, inner_mid_idx, outer_p0_idx }, type);
+    dd.add_triangle({ outer_p0_idx, inner_mid_idx, (remove_mid_tri ? outer_p1_seg2_idx : outer_p1_seg1_idx) }, type);
     
     if (!remove_mid_tri) {
         uint32_t outer_mid_idx = dd.add_vertex({ outer_mid, 0.0 });
-        dd.add_triangle(inner_mid_idx, outer_p1_seg2_idx, outer_p1_seg1_idx);
-        dd.add_triangle(outer_p1_seg1_idx, outer_p1_seg2_idx, outer_mid_idx); // remove for bevelled corners
+        dd.add_triangle({ inner_mid_idx, outer_p1_seg2_idx, outer_p1_seg1_idx }, type);
+        dd.add_triangle({ outer_p1_seg1_idx, outer_p1_seg2_idx, outer_mid_idx }, type); // remove for bevelled corners
     }
 
     // Segment 2
-    dd.add_triangle(inner_mid_idx, inner_p2_idx, outer_p2_idx);
-    dd.add_triangle(inner_mid_idx, outer_p2_idx, outer_p1_seg2_idx);
+    dd.add_triangle({ inner_mid_idx, inner_p2_idx, outer_p2_idx }, type);
+    dd.add_triangle({ inner_mid_idx, outer_p2_idx, outer_p1_seg2_idx }, type);
 
     return { 
         .orient = orient, 
@@ -358,14 +358,14 @@ static stitch_edge corner_triangulate(glm::dvec2 p0, glm::dvec2 p1, glm::dvec2 p
 }
 
 // based on https://www.codeproject.com/Articles/226569/Drawing-polylines-by-tessellation
-void polyline_triangulate(std::span<const glm::dvec2> polyline, double width, draw_datad& dd, double eps)
+void polyline_triangulate(std::span<const glm::dvec2> polyline, double width, osm_tri_datad& dd, osm_tri_type type, double eps)
 {
     if (polyline.size() < 2) {
         return;
     }
 
     if (polyline.size() == 2) {
-        segment_triangulate(polyline[0], polyline[1], width, dd);
+        segment_triangulate(polyline[0], polyline[1], width, dd, type);
     }
     else {
         stitch_edge stitch_edge{ .inner_idx = UINT32_MAX, .outer_idx = UINT32_MAX };
@@ -377,7 +377,7 @@ void polyline_triangulate(std::span<const glm::dvec2> polyline, double width, dr
             glm::dvec2 p2 = (i == polyline.size() - 2) ? polyline[i + 1] : 
                 ((polyline[i] + polyline[i + 1]) / 2.0);
 
-            stitch_edge = corner_triangulate(p0, polyline[i], p2, stitch_edge, width, dd, eps);
+            stitch_edge = corner_triangulate(p0, polyline[i], p2, stitch_edge, width, dd, type, eps);
         }
     }
 }

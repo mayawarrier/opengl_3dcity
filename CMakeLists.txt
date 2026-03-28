@@ -11,7 +11,7 @@ set(SOURCES
     "src/glutils.cpp"
     "src/viewport.hpp"
     "src/viewport.cpp"
-    "src/osm/drawdata.hpp"
+    "src/osm/draw_data.hpp"
     "src/osm/common.hpp"
     "src/osm/containers/fwd.hpp"
     "src/osm/containers/way_network.hpp"

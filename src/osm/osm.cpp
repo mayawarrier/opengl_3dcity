@@ -156,7 +156,7 @@ private:
 };
 
 
-bool read_osmfile(const std::string& filepath_or_url, osm_data& out_data)
+bool read_osmfile(const std::string& filepath_or_url, osm_gl_draw_data& out_data)
 {
     osm_mesh_builder<
         bldg_comp_builder, 
@@ -174,30 +174,5 @@ bool read_osmfile(const std::string& filepath_or_url, osm_data& out_data)
         return false;
     }
 
-    std::vector<draw_datad> drawdata;
-    if (mesh_builder.build(drawdata)) 
-    {
-        for (size_t i = 0; i < drawdata.size(); ++i)
-        {
-            auto& dd = drawdata[i];
-
-            uint32_t verts_startidx = out_data.data.num_verts();
-            for (double v : dd.verts) {
-                out_data.data.verts.push_back(float(v));
-            }
-            uint32_t tri_startidx = out_data.data.num_tris();
-            for (uint tri_index : dd.tri_indices) {
-                out_data.data.tri_indices.push_back(tri_index + verts_startidx);
-            }
-
-            out_data.color_ranges.push_back({
-                tri_startidx,
-                dd.num_tris(),
-                dd.color
-            });
-        }
-        return true;
-    }
-
-    return false;
+    return mesh_builder.build(out_data);
 }
