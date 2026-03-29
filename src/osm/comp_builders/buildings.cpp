@@ -407,7 +407,7 @@ static void dd_add_ring_sides(osm_tri_datad& dd, uint32_t num_verts,
 {
     assert(ring_orient != ORIENT_COLL);
 
-    bool rev_winding = (ring_orient == ORIENT_CCW);
+    bool rev_winding = (ring_orient != ORIENT_CCW);
     for (uint32_t icur = 0; icur < num_verts; ++icur)
     {
         uint32_t inext = (icur + 1) % num_verts;
@@ -434,11 +434,10 @@ static void generate_comp_mesh(osm_tri_datad& dd, const building_comp& comp, con
         auto tri_indices = polygon_triangulate(poly);
         auto poly_nodes = osm_area::poly_nodes(poly);
 
-        // how does this assert pass?!
-        assert(check_tris_oriented(poly_nodes, tri_indices, ORIENT_CCW));
+        assert(check_tris_winding(poly_nodes, tri_indices, ORIENT_CCW));
 
-        uint32_t bot_verts_idx = dd_add_polygon(dd, poly_nodes, tri_indices, comp.ht_btm * obj_db->vert_scale);
-        uint32_t top_verts_idx = dd_add_polygon(dd, poly_nodes, tri_indices, comp.ht_top * obj_db->vert_scale, true);
+        uint32_t bot_verts_idx = dd_add_polygon(dd, poly_nodes, tri_indices, comp.ht_btm * obj_db->vert_scale, true);
+        uint32_t top_verts_idx = dd_add_polygon(dd, poly_nodes, tri_indices, comp.ht_top * obj_db->vert_scale);
         
         auto& outer_ring = poly[0];
         uint32_t outer_size = uint32_t(outer_ring.size());

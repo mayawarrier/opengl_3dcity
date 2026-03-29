@@ -184,10 +184,10 @@ orient_t ring_orient(const TRing& verts)
     return orient_type(ring_double_area(verts));
 }
 
-// Check if triangles are oriented a certain way. 
+// Check if triangles are wound a certain way. 
 // If allow_coll is true, then degenerate triangles are allowed.
-bool check_tris_oriented(const auto& verts, 
-    std::span<const uint32_t> indices, orient_t desired_orient, bool allow_coll = true)
+bool check_tris_winding(const auto& verts, 
+    std::span<const uint32_t> indices, orient_t winding, bool allow_coll = true)
 {
     for (size_t i = 0; i < indices.size(); i += 3)
     {
@@ -196,12 +196,15 @@ bool check_tris_oriented(const auto& verts,
         auto v2 = vert_to_dvec2(verts[indices[i + 2]]);
         
         auto o = orient(v0, v1, v2);
-        if (o != desired_orient && !(allow_coll && o == ORIENT_COLL)) {
+        if (o != winding && !(allow_coll && o == ORIENT_COLL)) {
             return false;
         }
     }
     return true;
 }
+
+// Note convention: the first ring is the outer ring and must be CCW, 
+// and all subsequent rings are holes and must be CW.
 
 // Fraction of outer multipolygon covered by inner multipolygons.
 // The inner multipolygons must be fully covered by the outer multipolygon.
@@ -214,7 +217,10 @@ double multipoly_coverage(std::span<const TMultiPoly*> inner_mpolys, const TMult
 template <class TMultiPoly> requires RingedMultiPolygon<TMultiPoly>
 bool multipoly_covered_by(const TMultiPoly& inner_mpoly, const TMultiPoly& outer_mpoly, double tol);
 
-// Triangulate polygon.
+// Triangulate polygon. 
+// Output triangles are CCW.
+// note: always check winding of triangles returned by this function,
+// thanks to this nasty nasty bug: https://github.com/mapbox/earcut/issues/133
 template <class TPoly> requires RingedPolygon<TPoly>
 std::vector<uint32_t> polygon_triangulate(const TPoly& polygon);
 

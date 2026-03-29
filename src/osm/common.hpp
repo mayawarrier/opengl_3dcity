@@ -289,8 +289,6 @@ concept Ring =
     std::ranges::contiguous_range<TRing> && 
     Vertex<std::ranges::range_value_t<TRing>>;
 
-// First ring is the outer ring, subsequent are inner rings (if any).
-// Outer ring is CCW, inner rings CW.
 template <class TPoly>
 concept RingedPolygon = 
     std::ranges::contiguous_range<TPoly> && 
