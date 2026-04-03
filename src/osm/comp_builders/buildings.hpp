@@ -3,7 +3,7 @@
 #define OSM_MESH_BUILDINGS_HPP
 
 #include "types.hpp"
-
+#include <osmium/osm/area.hpp>
 
 // todo: add more types
 // https://wiki.openstreetmap.org/wiki/Buildings
@@ -27,7 +27,7 @@ enum building_part_type
 
 struct building_comp
 {
-    int mesh_obj_idx;
+    int entity_idx;
 
     // building_type or building_part_type, 
     // depending on is_part
@@ -53,12 +53,12 @@ struct building_comp
 
 struct bldg_comp_builder
 {
-    using comp_type = building_comp;
+    using comp_t = building_comp;
     constexpr const char* comp_type_name() const { return "building"; }
 
     template <class ...TComps>
-    bool add_comp(int mesh_obj_idx, const osmium::OSMObject* obj,
-        osm_mesh_comp_db<TComps...>* comp_db, osm_mesh_object::comp_info_vec_t& comp_info)
+    bool add_comp(int entity_idx, const osmium::OSMObject* obj,
+        mesh_comp_db<TComps...>* comp_db, mesh_entity::comp_info_vec_t& comp_info)
     {
         if (obj->type() != osmium::item_type::area) {
             return false;
@@ -74,7 +74,7 @@ struct bldg_comp_builder
             // prefer bldg_type over bldg_part_type as authoritative
             // since objects might have both building and building:part tags
             // (see note for BUILDING_PART_TYPE_NO)
-            osm_comp_type comp_type = bldg_type != -1 ? COMP_TYPE_BUILDING : COMP_TYPE_BUILDING_PART;
+            ent_comp_type comp_type = bldg_type != -1 ? COMP_TYPE_BUILDING : COMP_TYPE_BUILDING_PART;
 
             if (bldg_part_type == BUILDING_PART_TYPE_NO) 
             {
@@ -87,7 +87,7 @@ struct bldg_comp_builder
 
             auto& comps_vec = comp_db->comps_vec<building_comp>();
             building_comp comp = {
-                .mesh_obj_idx = mesh_obj_idx,
+                .entity_idx = entity_idx,
                 .type = comp_type == COMP_TYPE_BUILDING ? bldg_type : bldg_part_type,
                 .is_part = comp_type == COMP_TYPE_BUILDING_PART,            
                 .parts_only = bldg_part_type == BUILDING_PART_TYPE_NO
@@ -107,15 +107,15 @@ struct bldg_comp_builder
     }
 
     template <class ...TComps>
-    bool build_all(const osm_mesh_object_db* obj_db,
-        osm_mesh_comp_db<TComps...>* comp_db, std::vector<osm_tri_datad>& out_drawdata)
+    bool build_all(const mesh_entity_db* obj_db,
+        mesh_comp_db<TComps...>* comp_db, std::vector<osm_tri_datad>& out_drawdata)
     {
         auto& bldgs = comp_db->comps_vec<building_comp>();
         return do_build_all(obj_db, bldgs, out_drawdata);
     }
 
 private:
-    bool do_build_all(const osm_mesh_object_db* obj_db, 
+    bool do_build_all(const mesh_entity_db* obj_db, 
         const std::vector<building_comp>& bldgs, std::vector<osm_tri_datad>& out_drawdata);
 
     int get_building_type(const osmium::TagList& tags) const

@@ -17,7 +17,7 @@
 
 // Converts OSM data into triangles for rendering.
 template <class... Ts>
-    requires (MeshCompBuilder<Ts, typename Ts::comp_type...> && ...)
+    requires (MeshCompBuilder<Ts, typename Ts::comp_t...> && ...)
 class osm_mesh_builder
 {
 public:
@@ -48,37 +48,34 @@ public:
         assert_msg(!way.is_closed(), "Closed ways must be added as areas");
         lock_nodes();
 
-        osm_mesh_object::comp_info_vec_t comps;
-        osm_mesh_object::comp_flags_t comp_flags;
-        get_comps(&way, comps, comp_flags);
-
-        if (!comps.empty())
-        {
-            bbox2d bbox;
-            std::vector<osm_node> nodes;
-            for (auto& nr : way.nodes()) {
-                nodes.push_back(nr_to_osm_node(nr, bbox));
-            }
-
-            m_obj_db.ways.push_back({ 
-                way.id(), 
-                std::move(nodes) 
-            });
-
-            const char* name = way.tags()["name"];
-            m_obj_db.objects.push_back({
-                .type = OSM_OBJ_TYPE_WAY,
-                .osm_obj_idx = int(m_obj_db.ways.size() - 1),
-                .bbox = bbox,
-                .comp_flags = comp_flags,
-                .comps = std::move(comps),
-                .name = name ? name : ""
-            });
-
-            return true;
+        auto ci = get_comps_info(&way);
+        if (ci.comps.empty()) {
+            return false;
         }
 
-        return false;
+        bbox2d bbox;
+        std::vector<osm_node> nodes;
+        for (auto& nr : way.nodes()) {
+            nodes.push_back(nr_to_osm_node(nr, bbox));
+        }
+
+        m_entity_db.ways.push_back({ 
+            way.id(), 
+            std::move(nodes) 
+        });
+
+        const char* name = way.tags()["name"];
+        m_entity_db.entities.push_back({
+            .obj_type = OSM_OBJ_TYPE_WAY,
+            .obj_idx = int(m_entity_db.ways.size() - 1),
+            .bbox = bbox,
+            .comp_flags = ci.comp_flags,
+            .way_comp_flags = ci.way_comp_flags,
+            .comps = std::move(ci.comps),
+            .name = name ? name : ""
+        });
+
+        return true;
     }
 
     // Add area.
@@ -90,85 +87,78 @@ public:
         }
         lock_nodes();
 
-        osm_mesh_object::comp_info_vec_t comps;
-        osm_mesh_object::comp_flags_t comp_flags;
-        get_comps(&area, comps, comp_flags);
-
-        if (!comps.empty()) 
-        {
-            std::vector<osm_node> nodes;
-            std::vector<std::tuple<int, int, int>> ring_bounds;
-
-            auto add_ring = [&](int poly_idx, 
-                const auto& ring, orient_t desired_orient, auto get_node)
-            {
-                assert(ring.is_closed() && ring.size() >= 3);
-
-                int start_idx = int(nodes.size());
-                int ring_size = int(ring.size()) - 1;
-
-                for (int i = 0; i < ring_size; ++i) {
-                    nodes.push_back(get_node(ring[i]));
-                }
-                auto ring_span = std::span(&nodes[start_idx], ring_size);
-                if (ring_orient(ring_span) != desired_orient) {
-                    std::reverse(ring_span.begin(), ring_span.end());
-                }
-                ring_bounds.push_back({ poly_idx, start_idx, ring_size });
-            };
-
-            bbox2d bbox;
-            int poly_idx = 0;          
-            for (const auto& outer_ring : area.outer_rings()) 
-            {
-                add_ring(poly_idx, outer_ring, ORIENT_CCW, [&](const auto& nr) { 
-                    return nr_to_osm_node(nr, bbox); 
-                });
-                for (const auto& inner_ring : area.inner_rings(outer_ring)) {
-                    add_ring(poly_idx, inner_ring, ORIENT_CW, [&](const auto& nr) { 
-                        return nr_to_osm_node(nr); 
-                    });
-                }
-                poly_idx++;
-            }
-
-            osm_area::multipoly_t polys(area.outer_rings().size());
-            for (const auto& [poly_idx, start_idx, ring_size] : ring_bounds) {
-                polys[poly_idx].push_back({ &nodes[start_idx], size_t(ring_size) });
-            }
-
-            m_obj_db.areas.push_back({ 
-                area.orig_id(), 
-                std::move(nodes), 
-                std::move(polys) 
-            });
-            
-            const char* name = area.tags()["name"];
-            m_obj_db.objects.push_back({
-                .type = OSM_OBJ_TYPE_AREA,
-                .osm_obj_idx = int(m_obj_db.areas.size() - 1),
-                .bbox = bbox,
-                .comp_flags = comp_flags,
-                .comps = std::move(comps),
-                .name = name ? name : ""
-            });
-
-            return true;
+        auto ci = get_comps_info(&area);
+        if (ci.comps.empty()) {
+            return false;
         }
+
+        std::vector<osm_node> nodes;
+        std::vector<std::tuple<int, int, int>> ring_bounds;
+
+        auto add_ring = [&](int poly_idx, 
+            const auto& ring, orient_t desired_orient, auto get_node)
+        {
+            assert(ring.is_closed() && ring.size() >= 3);
+
+            int start_idx = int(nodes.size());
+            int ring_size = int(ring.size()) - 1;
+
+            for (int i = 0; i < ring_size; ++i) {
+                nodes.push_back(get_node(ring[i]));
+            }
+            auto ring_span = std::span(&nodes[start_idx], ring_size);
+            if (ring_orient(ring_span) != desired_orient) {
+                std::reverse(ring_span.begin(), ring_span.end());
+            }
+            ring_bounds.push_back({ poly_idx, start_idx, ring_size });
+        };
+
+        bbox2d bbox;
+        int poly_idx = 0;          
+        for (const auto& outer_ring : area.outer_rings()) 
+        {
+            add_ring(poly_idx, outer_ring, ORIENT_CCW, [&](const auto& nr) { 
+                return nr_to_osm_node(nr, bbox); 
+            });
+            for (const auto& inner_ring : area.inner_rings(outer_ring)) {
+                add_ring(poly_idx, inner_ring, ORIENT_CW, [&](const auto& nr) { 
+                    return nr_to_osm_node(nr); 
+                });
+            }
+            poly_idx++;
+        }
+
+        osm_area::multipoly_t polys(area.outer_rings().size());
+        for (const auto& [poly_idx, start_idx, ring_size] : ring_bounds) {
+            polys[poly_idx].push_back({ &nodes[start_idx], size_t(ring_size) });
+        }
+
+        m_entity_db.areas.push_back({ 
+            area.orig_id(), 
+            std::move(nodes), 
+            std::move(polys) 
+        });
+        
+        const char* name = area.tags()["name"];
+        m_entity_db.entities.push_back({
+            .obj_type = OSM_OBJ_TYPE_AREA,
+            .obj_idx = int(m_entity_db.areas.size() - 1),
+            .bbox = bbox,
+            .comp_flags = ci.comp_flags,
+            .way_comp_flags = ci.way_comp_flags,
+            .comps = std::move(ci.comps),
+            .name = name ? name : ""
+        });
+
+        return true;
     }
 
     // Build meshes.
     bool build(osm_gl_draw_data& out_data)
     {
-        buffer<const osm_mesh_object*> obj_ptrs(m_obj_db.objects.size(), buffer_overwrite);
-        for (size_t i = 0; i < m_obj_db.objects.size(); ++i) {
-            obj_ptrs.ptr[i] = &m_obj_db.objects[i];
+        if (!finalize_entity_db()) {
+            return false;
         }
-        m_obj_db.obj_tree = { aabb_tree_unsafe_ctor_t{}, obj_ptrs.span() };
-
-        m_obj_db.center = m_center;
-        double center_lat = osmium::geom::detail::y_to_lat(m_center.y);
-        m_obj_db.vert_scale = 1.0 / std::cos(glm::radians(center_lat));
 
         bool ret = true;
         std::vector<osm_tri_datad> tri_data;
@@ -177,84 +167,87 @@ public:
             auto do_build = [&](auto& builder) 
             {
                 const char* comp_type = builder.comp_type_name();
-                if (!builder.build_all(&m_obj_db, &m_comp_db, tri_data)) {
+                if (!builder.build_all(&m_entity_db, &m_comp_db, tri_data)) {
                     logERROR("Failed to build %s meshes", comp_type);
                     ret = false;
                 }
             };
             (do_build(builders), ...);
-        }, 
-            m_comp_builders);
+        }, m_comp_builders);
 
         if (!ret) {
             return false;
         }
 
-        osm_tri_dataf df;
-        for (auto& dd : tri_data) {
-            df.add_tridata(dd);
-        }
-
-        std::vector<glm::fvec3> tri_normals(df.tris().size());
-        std::vector<std::vector<uint32_t>> vert2tris(df.verts().size());
-
-        for (uint32_t itri = 0; itri < uint32_t(df.tris().size()); ++itri) 
+        log_func("Computing normals", [&]()
         {
-            auto& tri = df.tris()[itri];
-            auto& indices = tri.vert_idxs;
-
-            auto v01 = df.verts()[indices[1]] - df.verts()[indices[0]];
-            auto v02 = df.verts()[indices[2]] - df.verts()[indices[0]];
-            auto normal = glm::normalize(glm::cross(v01, v02));
-            tri_normals[itri] = normal;
-
-            for (int i = 0; i < 3; ++i) {
-                vert2tris[indices[i]].push_back(itri);
+            osm_tri_dataf df;
+            for (auto& dd : tri_data) {
+                df.add_tridata(dd);
             }
-        }
-        
-        const float SMOOTH_THRESH = std::cos(glm::radians(20.0f));
 
-        std::vector<glm::fvec3> tri_corner_normals(df.tris().size() * 3);
-        for (uint32_t itri = 0; itri < uint32_t(df.tris().size()); ++itri)
-        {
-            auto tri_type = df.tris()[itri].type;
-            auto& indices = df.tris()[itri].vert_idxs;
-            
-            for (int i = 0; i < 3; ++i) 
+            std::vector<glm::fvec3> tri_normals(df.tris().size());
+            std::vector<std::vector<uint32_t>> vert2tris(df.verts().size());
+
+            for (uint32_t itri = 0; itri < uint32_t(df.tris().size()); ++itri)
             {
-                auto& corner_normal = tri_corner_normals[3 * itri + i];
-                for (uint32_t iadjface : vert2tris[indices[i]]) 
-                {
-                    auto adj_tri_type = df.tris()[iadjface].type;
-                    auto& adj_normal = tri_normals[iadjface];
+                auto& tri = df.tris()[itri];
+                auto& indices = tri.vert_idxs;
 
-                    if (adj_tri_type == tri_type && 
-                        glm::dot(adj_normal, tri_normals[itri]) >= SMOOTH_THRESH) {
-                        corner_normal += adj_normal;
-                    }
+                auto v01 = df.verts()[indices[1]] - df.verts()[indices[0]];
+                auto v02 = df.verts()[indices[2]] - df.verts()[indices[0]];
+                auto normal = glm::normalize(glm::cross(v01, v02));
+                tri_normals[itri] = normal;
+
+                for (int i = 0; i < 3; ++i) {
+                    vert2tris[indices[i]].push_back(itri);
                 }
-                corner_normal = glm::normalize(corner_normal);
             }
-        }
 
-        osm_gl_draw_data result;
-        for (uint32_t itri = 0; itri < uint32_t(df.tris().size()); ++itri) 
-        {
-            auto tri_type = df.tris()[itri].type;
-            auto& og_indices = df.tris()[itri].vert_idxs;
+            const float SMOOTH_THRESH = std::cos(glm::radians(20.0f));
 
-            uint32_t verts_idx = uint32_t(result.verts.size());
-            for (int i = 0; i < 3; ++i) 
+            std::vector<glm::fvec3> tri_corner_normals(df.tris().size() * 3);
+            for (uint32_t itri = 0; itri < uint32_t(df.tris().size()); ++itri)
             {
-                auto& vert = df.verts()[og_indices[i]];
-                auto& normal = tri_corner_normals[3 * itri + i];
-                result.verts.push_back({ vert.x, vert.y, vert.z, normal.x, normal.y, normal.z });
-            }
-            result.tris[tri_type].push_back({ verts_idx, verts_idx + 1, verts_idx + 2 });
-        }
+                auto tri_type = df.tris()[itri].type;
+                auto& indices = df.tris()[itri].vert_idxs;
 
-        out_data = std::move(result);
+                for (int i = 0; i < 3; ++i)
+                {
+                    auto& corner_normal = tri_corner_normals[3 * itri + i];
+                    for (uint32_t iadjface : vert2tris[indices[i]])
+                    {
+                        auto adj_tri_type = df.tris()[iadjface].type;
+                        auto& adj_normal = tri_normals[iadjface];
+
+                        if (adj_tri_type == tri_type &&
+                            glm::dot(adj_normal, tri_normals[itri]) >= SMOOTH_THRESH) {
+                            corner_normal += adj_normal;
+                        }
+                    }
+                    corner_normal = glm::normalize(corner_normal);
+                }
+            }
+
+            osm_gl_draw_data result;
+            for (uint32_t itri = 0; itri < uint32_t(df.tris().size()); ++itri)
+            {
+                auto tri_type = df.tris()[itri].type;
+                auto& og_indices = df.tris()[itri].vert_idxs;
+
+                uint32_t verts_idx = uint32_t(result.verts.size());
+                for (int i = 0; i < 3; ++i)
+                {
+                    auto& vert = df.verts()[og_indices[i]];
+                    auto& normal = tri_corner_normals[3 * itri + i];
+                    result.verts.push_back({ vert.x, vert.y, vert.z, normal.x, normal.y, normal.z });
+                }
+                result.tris[tri_type].push_back({ verts_idx, verts_idx + 1, verts_idx + 2 });
+            }
+
+            out_data = std::move(result);
+        });
+
         return true;
     }
 
@@ -284,25 +277,88 @@ private:
         return node;
     }
 
-    bool get_comps(const osmium::OSMObject* obj, 
-        osm_mesh_object::comp_info_vec_t& out_comps, osm_mesh_object::comp_flags_t& out_flags)
+    struct obj_comps_info
     {
+        mesh_entity::comp_info_vec_t comps;
+        mesh_entity::comp_flags_t comp_flags;
+        mesh_entity::way_comp_flags_t way_comp_flags;
+    };
+    obj_comps_info get_comps_info(const osmium::OSMObject* obj)
+    {
+        obj_comps_info ret;
+
         std::apply([&](auto&... builders) {
-            (builders.add_comp(int(m_obj_db.objects.size()), obj, &m_comp_db, out_comps), ...);
+            (builders.add_comp(int(m_entity_db.entities.size()), obj, &m_comp_db, ret.comps), ...);
         }, m_comp_builders);
 
-        for (const auto& comp : out_comps) {
-            if (out_flags.test(comp.type)) {
-                assert_msg(false, "Object %lld has multiple comps of type %d", obj->id(), comp.type);
-                return false;
+        for (const auto& comp : ret.comps) 
+        {
+            assert_msg(!ret.comp_flags[comp.type], 
+                "Object %lld has multiple comps of type %d", obj->id(), comp.type);
+            
+            ret.comp_flags[comp.type] = true;
+
+            if (obj->type() == osmium::item_type::way) {
+                switch (comp.type) {
+                case COMP_TYPE_HIGHWAY: ret.way_comp_flags[WAY_COMP_TYPE_HIGHWAY] = true;  break;
+                case COMP_TYPE_WATER:   ret.way_comp_flags[WAY_COMP_TYPE_WATERWAY] = true; break;
+                default: break;
+                }
             }
-            out_flags.set(comp.type);
         }
+        return ret;
+    }
+
+    bool finalize_entity_db()
+    {
+        m_entity_db.center = m_center;
+        double center_lat = osmium::geom::detail::y_to_lat(m_center.y);
+        m_entity_db.ht_scale = 1.0 / std::cos(glm::radians(center_lat));
+
+        log_func("Building spatial index", [&]() 
+        {
+            buffer<const mesh_entity*> obj_ptrs(m_entity_db.entities.size(), buffer_overwrite);
+            for (size_t i = 0; i < m_entity_db.entities.size(); ++i) {
+                obj_ptrs.ptr[i] = &m_entity_db.entities[i];
+            }
+            m_entity_db.entity_tree = { aabb_tree_unsafe_ctor_t{}, obj_ptrs.span() };
+        }, "Entity DB");
+
+        log_func("Building way network", [&]() 
+        {
+            for (const auto& way : m_entity_db.entities)
+            {
+                if (way.obj_type != OSM_OBJ_TYPE_WAY) {
+                    continue;
+                }
+                auto& way_osm = m_entity_db.get<osm_way>(way.obj_idx);
+
+                for (size_t i = 0; i < way_osm.nodes.size(); ++i)
+                {
+                    auto* prev_way_node = (i == 0) ? nullptr : &way_osm.nodes[i - 1];
+                    auto* cur_way_node = &way_osm.nodes[i];
+                    auto* next_way_node = (i == way_osm.nodes.size() - 1) ? nullptr : &way_osm.nodes[i + 1];
+
+                    auto nodeitr = m_entity_db.way_net.get_or_add_node(cur_way_node->id, cur_way_node->vert);
+
+                    auto& adj_node_ids = nodeitr->second.adj_node_ids;
+                    if (prev_way_node) {
+                        adj_node_ids.insert(prev_way_node->id);
+                    }
+                    if (next_way_node) {
+                        adj_node_ids.insert(next_way_node->id);
+                        m_entity_db.way_net.add_edge({ nodeitr->first, next_way_node->id }, &way);
+                    }
+                }
+            }
+        }, "Entity DB");
+
+        return true;
     }
 
 private:
-    osm_mesh_object_db m_obj_db;
-    osm_mesh_comp_db<typename Ts::comp_type...> m_comp_db;
+    mesh_entity_db m_entity_db;
+    mesh_comp_db<typename Ts::comp_t...> m_comp_db;
     std::tuple<Ts...> m_comp_builders;
 
     glm::dvec2 m_center{ 0.0, 0.0 };

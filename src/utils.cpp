@@ -55,10 +55,11 @@ bool log_init(const char* logfile)
     }
 
 #ifdef _WIN32
-    LOG.has_colors = win32_console_enable_colors();  
     if (!win32_console_enable_utf8()) {
         logWARNING("Failed to enable UTF-8");
     };
+    LOG.has_colors = win32_console_enable_colors();
+
 #elif defined(HAS_POSIX_2001)
     LOG.has_colors = posix_has_term_colors();
 #endif

@@ -8,13 +8,12 @@
 
 template <class Traits, int Dim, class TObj>
 concept AabbTraits = requires(Traits traits, TObj obj) {
-    typename Traits::search_flags_type;
+    typename Traits::query_flags_t;
     { traits.bbox(obj) } -> std::same_as<const bbox<Dim>&>;
-    { traits.flags(obj) } -> std::same_as<const typename Traits::search_flags_type&>;
-} && 
-    is_instance_of_nontype_template<typename Traits::search_flags_type, std::bitset>::value;
+    { traits.flags(obj) } -> std::same_as<const typename Traits::query_flags_t&>;
+} &&
+is_instance_of_nontype_template<typename Traits::query_flags_t, std::bitset>::value;
 
-// By default, expect a pointer type. User can provide custom traits if needed.
 template <class T>
 using default_aabb_ptr_traits = typename std::pointer_traits<T>::element_type::aabb_traits;
 
@@ -30,9 +29,11 @@ using aabb_tree3d = aabb_tree<3, T, Traits>;
 
 template <class Traits, class TWay>
 concept WayNetworkTraits = requires(Traits traits, const TWay* way) {
-    typename Traits::way_enum_type;
-    { Traits::way_type(way) } -> std::same_as<typename Traits::way_enum_type>;
-};
+    typename Traits::way_type_t;
+    typename Traits::way_type_flags_t;
+    { traits.type_flags(way) } -> std::convertible_to<const typename Traits::way_type_flags_t&>;
+} &&
+is_instance_of_nontype_template<typename Traits::way_type_flags_t, std::bitset>::value;
 
 template <class TWay, class Traits = typename TWay::way_net_traits>
     requires WayNetworkTraits<Traits, TWay>

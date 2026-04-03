@@ -68,8 +68,8 @@ private:
         };
 
     public:
-        logger(const osm_mesh_object_db* obj_db) :
-            m_obj_db(obj_db)
+        logger(const mesh_entity_db* obj_db) :
+            m_entity_db(obj_db)
         {}
 
         log& new_log(const building_comp* part_comp, osmium::object_id_type id)
@@ -84,7 +84,7 @@ private:
             return m_logs.at(part_comp);
         }
 
-        void log_stage(log& log, log_stage_type stage, std::span<const osm_mesh_object*> bldgs)
+        void log_stage(log& log, log_stage_type stage, std::span<const mesh_entity*> bldgs)
         {
             auto& log_vec = [&]() -> std::vector<osmium::object_id_type>& {
                 switch (stage) {
@@ -98,7 +98,7 @@ private:
             }();
 
             for (const auto* bldg : bldgs) {
-                log_vec.push_back(m_obj_db->obj_osm_id(*bldg));
+                log_vec.push_back(m_entity_db->ent_osm_id(*bldg));
             }     
             log.stage = stage;
         }
@@ -114,7 +114,7 @@ private:
                 auto& log = m_logs.at(part_comp);
                 if (log.stage >= 0) 
                 {
-                    auto& part = m_obj_db->get<osm_mesh_object>(part_comp->mesh_obj_idx);
+                    auto& part = m_entity_db->get<mesh_entity>(part_comp->entity_idx);
                     if (part.bbox.inside(scaled_bbox)) {
                         uparts_per_stage[log.stage].push_back(part_comp);
                     } else {
@@ -189,7 +189,7 @@ private:
         }
 
     private:
-        const osm_mesh_object_db* m_obj_db;
+        const mesh_entity_db* m_entity_db;
         types::unord_flat_map<const building_comp*, log> m_logs;
     };
 
@@ -199,34 +199,34 @@ public:
     using bldg2part_map_type = comp_mapping_t;
 
 public:
-    bldg_part_mapper(const osm_mesh_object_db* obj_db,
+    bldg_part_mapper(const mesh_entity_db* entity_db,
         const std::vector<building_comp>& all_comps,
         const std::vector<const building_comp*>& part_comps) :
-        m_obj_db(obj_db),
+        m_entity_db(entity_db),
         m_all_comps(all_comps),
         m_part_comps(part_comps),
-        m_logger(obj_db)
+        m_logger(entity_db)
     {}
 
     void do_mapping()
     {
         bbox2d bldgs_bbox;
         for (auto& comp : m_all_comps) {
-            auto& bldg = m_obj_db->get<osm_mesh_object>(comp.mesh_obj_idx);
+            auto& bldg = m_entity_db->get<mesh_entity>(comp.entity_idx);
             bldgs_bbox.extend(bldg.bbox);
         }
 
         for (auto* part_comp : m_part_comps)
         {
-            auto& part = m_obj_db->get<osm_mesh_object>(part_comp->mesh_obj_idx);
-            auto& part_osm = m_obj_db->get<osm_area>(part.osm_obj_idx);
+            auto& part = m_entity_db->get<mesh_entity>(part_comp->entity_idx);
+            auto& part_osm = m_entity_db->get<osm_area>(part.obj_idx);
             auto& log = m_logger.new_log(part_comp, part_osm.id);
 
-            osm_mesh_object::comp_flags_t search_flags;
+            mesh_entity::comp_flags_t search_flags;
             search_flags.set(COMP_TYPE_BUILDING);
 
             // Get nearby buildings.
-            auto cand_bldgs = m_obj_db->obj_tree.query_intersecting_bboxes(part.bbox, search_flags);
+            auto cand_bldgs = m_entity_db->entity_tree.query_intersecting_bboxes(part.bbox, search_flags);
 
             m_logger.log_stage(log, m_logger.STAGE_INTER, cand_bldgs);
             if (cand_bldgs.empty()) {
@@ -242,7 +242,7 @@ public:
                 static constexpr double AREA_TOL_FRAC = 1e-4;
                 static constexpr double MIN_TOL = 0.1;
 
-                auto& bldg_osm = m_obj_db->get<osm_area>(bldg->osm_obj_idx);
+                auto& bldg_osm = m_entity_db->get<osm_area>(bldg->obj_idx);
                 double bldg_area = multipoly_area(bldg_osm.polys);
                 double area_tol = std::max(AREA_TOL_FRAC * (part_area + bldg_area), MIN_TOL);
 
@@ -281,15 +281,15 @@ public:
     }
 
 private:
-    const building_comp* get_comp_ptr(const osm_mesh_object* obj) const {
-        return &m_all_comps[obj->get_comp_idx(COMP_TYPE_BUILDING)];
+    const building_comp* get_comp_ptr(const mesh_entity* ent) const {
+        return &m_all_comps[m_entity_db->ent_comp_idx(*ent, COMP_TYPE_BUILDING)];
     }
 
     // Parts that reach here have multiple candidates that fully cover them (in 2D).
     bool map_part_pass2(const building_comp* part_comp,
-         std::vector<const osm_mesh_object*>& cand_bldgs, logger::log& log)
+         std::vector<const mesh_entity*>& cand_bldgs, logger::log& log)
     {
-        auto handle_in_pass3 = [&](const osm_mesh_object* bldg) 
+        auto handle_in_pass3 = [&](const mesh_entity* bldg) 
         {
             auto* bldg_comp = get_comp_ptr(bldg);
             m_pass3_bldg2part[bldg_comp].push_back(part_comp);
@@ -297,14 +297,14 @@ private:
             m_logger.log_stage(log, m_logger.STAGE_PASS2, std::span(&bldg, 1));
         };
 
-        auto add_mapping = [&](const osm_mesh_object* bldg) 
+        auto add_mapping = [&](const mesh_entity* bldg) 
         {
             auto* bldg_comp = get_comp_ptr(bldg);
             m_bldg2part_map[bldg_comp].push_back(part_comp);
             m_logger.log_stage(log, m_logger.STAGE_PASS2, std::span(&bldg, 1));
         };
 
-        auto map_one_of = [&]<class Pred>(Pred pred) 
+        auto map_one_of = [&](auto pred) 
         {
             auto res = get_one_of(cand_bldgs, [&](const auto* bldg) {
                 return std::invoke(pred, get_comp_ptr(bldg));
@@ -366,7 +366,7 @@ private:
     }
 
 private:
-    const osm_mesh_object_db* m_obj_db;
+    const mesh_entity_db* m_entity_db;
     const std::vector<building_comp>& m_all_comps;
     const std::vector<const building_comp*>& m_part_comps;
 
@@ -424,10 +424,10 @@ static void dd_add_ring_sides(osm_tri_datad& dd, uint32_t num_verts,
     }
 }
 
-static void generate_comp_mesh(osm_tri_datad& dd, const building_comp& comp, const osm_mesh_object_db* obj_db)
+static void generate_comp_mesh(osm_tri_datad& dd, const building_comp& comp, const mesh_entity_db* ent_db)
 {
-    auto& obj = obj_db->get<osm_mesh_object>(comp.mesh_obj_idx);
-    auto& obj_osm = obj_db->get<osm_area>(obj.osm_obj_idx);
+    auto& obj = ent_db->get<mesh_entity>(comp.entity_idx);
+    auto& obj_osm = ent_db->get<osm_area>(obj.obj_idx);
 
     for (auto& poly : obj_osm.polys) 
     {
@@ -436,8 +436,8 @@ static void generate_comp_mesh(osm_tri_datad& dd, const building_comp& comp, con
 
         assert(check_tris_winding(poly_nodes, tri_indices, ORIENT_CCW));
 
-        uint32_t bot_verts_idx = dd_add_polygon(dd, poly_nodes, tri_indices, comp.ht_btm * obj_db->vert_scale, true);
-        uint32_t top_verts_idx = dd_add_polygon(dd, poly_nodes, tri_indices, comp.ht_top * obj_db->vert_scale);
+        uint32_t bot_verts_idx = dd_add_polygon(dd, poly_nodes, tri_indices, comp.ht_btm * ent_db->ht_scale, true);
+        uint32_t top_verts_idx = dd_add_polygon(dd, poly_nodes, tri_indices, comp.ht_top * ent_db->ht_scale);
         
         auto& outer_ring = poly[0];
         uint32_t outer_size = uint32_t(outer_ring.size());
@@ -457,7 +457,7 @@ static void generate_comp_mesh(osm_tri_datad& dd, const building_comp& comp, con
     }
 }
 
-bool bldg_comp_builder::do_build_all(const osm_mesh_object_db* obj_db, 
+bool bldg_comp_builder::do_build_all(const mesh_entity_db* entity_db, 
     const std::vector<building_comp>& all_comps, std::vector<osm_tri_datad>& out_tridata)
 {
     auto tbegin = clk::now();
@@ -476,7 +476,7 @@ bool bldg_comp_builder::do_build_all(const osm_mesh_object_db* obj_db,
     }
     logMESSAGE("%zu buildings, %zu parts", bldg_comps.size(), part_comps.size());
 
-    bldg_part_mapper part_mapper(obj_db, all_comps, part_comps);
+    bldg_part_mapper part_mapper(entity_db, all_comps, part_comps);
     timed_section("Mapping parts to buildings", [&]() 
     {
         part_mapper.do_mapping();
@@ -489,8 +489,8 @@ bool bldg_comp_builder::do_build_all(const osm_mesh_object_db* obj_db,
     osm_tri_datad dd;
 
     auto comp_osm_id = [&](const building_comp* comp) {
-        auto& obj = obj_db->get<osm_mesh_object>(comp->mesh_obj_idx);
-        return obj_db->obj_osm_id(obj);
+        auto& obj = entity_db->get<mesh_entity>(comp->entity_idx);
+        return entity_db->ent_osm_id(obj);
     };
 
     timed_section("Generating meshes", [&]()
@@ -500,12 +500,12 @@ bool bldg_comp_builder::do_build_all(const osm_mesh_object_db* obj_db,
 
         for (auto* bldg_comp : bldg_comps)
         {
-            auto& bldg = obj_db->get<osm_mesh_object>(bldg_comp->mesh_obj_idx);
-            auto& bldg_osm = obj_db->get<osm_area>(bldg.osm_obj_idx);
+            auto& bldg = entity_db->get<mesh_entity>(bldg_comp->entity_idx);
+            auto& bldg_osm = entity_db->get<osm_area>(bldg.obj_idx);
 
             auto bldg_parts_it = bldg2parts.find(bldg_comp);
             if (bldg_parts_it == bldg2parts.end()) {
-                generate_comp_mesh(dd, *bldg_comp, obj_db);
+                generate_comp_mesh(dd, *bldg_comp, entity_db);
             } 
             else {
                 // due to mapper error, parts often do not cover the entire parent
@@ -516,8 +516,8 @@ bool bldg_comp_builder::do_build_all(const osm_mesh_object_db* obj_db,
                     std::vector<const osm_area::multipoly_t*> part_polys;
                     for (auto* part_comp : bldg_parts_it->second)
                     {
-                        auto& part = obj_db->get<osm_mesh_object>(part_comp->mesh_obj_idx);
-                        auto& part_osm = obj_db->get<osm_area>(part.osm_obj_idx);
+                        auto& part = entity_db->get<mesh_entity>(part_comp->entity_idx);
+                        auto& part_osm = entity_db->get<osm_area>(part.obj_idx);
                         part_polys.push_back(&part_osm.polys);
                     }
                     double parts_coverage = multipoly_coverage(std::span(part_polys), bldg_osm.polys);
@@ -525,10 +525,10 @@ bool bldg_comp_builder::do_build_all(const osm_mesh_object_db* obj_db,
                 }
 
                 if (!draw_parts_only) {
-                    generate_comp_mesh(dd, *bldg_comp, obj_db);
+                    generate_comp_mesh(dd, *bldg_comp, entity_db);
                 }
                 for (auto* part_comp : bldg_parts_it->second) {
-                    generate_comp_mesh(dd, *part_comp, obj_db);
+                    generate_comp_mesh(dd, *part_comp, entity_db);
                 }
 
                 logMESSAGE("Parts for building %lld %s %s", 
@@ -550,7 +550,7 @@ bool bldg_comp_builder::do_build_all(const osm_mesh_object_db* obj_db,
         }
 
         for (auto* part_comp : unmapped_parts) {
-            generate_comp_mesh(dd, *part_comp, obj_db);
+            generate_comp_mesh(dd, *part_comp, entity_db);
         }
     });
 

@@ -12,10 +12,12 @@
 
 #ifdef NDEBUG
 #include <boost/unordered/unordered_flat_map.hpp>
+#include <boost/unordered/unordered_flat_set.hpp>
 #include <boost/container/small_vector.hpp>
 #include <boost/container/flat_set.hpp>
 #else
 #include <unordered_map>
+#include <unordered_set>
 #include <set>
 #endif
 
@@ -44,6 +46,9 @@ namespace types
 #ifdef NDEBUG
     template <class ...Args> 
     using unord_flat_map = boost::unordered::unordered_flat_map<Args...>;
+
+    template <class T, class Compare = std::less<T>, class ...Args>
+    using unord_flat_set = boost::unordered::unordered_flat_set<T, Compare, Args...>;
     
     template <class T, class Compare = std::less<T>, class ...Args>
     using flat_set = boost::container::flat_set<T, Compare, Args...>;
@@ -57,6 +62,9 @@ namespace types
 #else
     template <class ...Args> 
     using unord_flat_map = std::unordered_map<Args...>; 
+
+    template <class T, class Compare = std::less<T>, class ...Args>
+    using unord_flat_set = std::unordered_set<T, Compare, Args...>;
 
     template <class T, class Compare = std::less<T>, class ...Args>
     using flat_set = std::set<T, Compare>;

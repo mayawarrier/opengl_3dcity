@@ -393,7 +393,7 @@ inline void log_func(const char* name, auto&& func, const char* prefix = nullptr
     log_colorMESSAGE("\033[1;32m", header.c_str());
 
     auto tbegin = clk::now();
-    func();
+    std::invoke(func);
     auto tend = clk::now();
     
     log_colorMESSAGE("\033[1;32m", "Done in %s", clock_dur_str(tend - tbegin).c_str());
@@ -426,11 +426,11 @@ public:
         TMaybeEmpty(), m_value(std::forward<SecondArgs>(s_args)...)
     {}
 
-    inline TMaybeEmpty& ebco_first() noexcept { return *this; }
-    inline const TMaybeEmpty& ebco_first() const noexcept { return *this; }
+    inline TMaybeEmpty& first() noexcept { return *this; }
+    inline const TMaybeEmpty& first() const noexcept { return *this; }
 
-    inline U& ebco_second() noexcept { return m_value; }
-    inline const U& ebco_second() const noexcept { return m_value; }
+    inline U& second() noexcept { return m_value; }
+    inline const U& second() const noexcept { return m_value; }
 
 private:
     U m_value;
@@ -450,11 +450,11 @@ public:
         m_first(), m_value(std::forward<SecondArgs>(s_args)...)
     {}
     
-    inline TMaybeEmpty& ebco_first() noexcept { return m_first; }
-    inline const TMaybeEmpty& ebco_first() const noexcept { return m_first; }
+    inline TMaybeEmpty& first() noexcept { return m_first; }
+    inline const TMaybeEmpty& first() const noexcept { return m_first; }
 
-    inline U& ebco_second() noexcept { return m_value; }
-    inline const U& ebco_second() const noexcept { return m_value; }
+    inline U& second() noexcept { return m_value; }
+    inline const U& second() const noexcept { return m_value; }
 
 private:
     TMaybeEmpty m_first;
@@ -498,7 +498,7 @@ It get_one_of(It first, It last, Pred pred)
 {
     It found_itr = last;
     for (; first != last; ++first) {
-        if (pred(*first)) {
+        if (std::invoke(pred, *first)) {
             if (found_itr == last) {
                 found_itr = first;
             } else {
@@ -515,9 +515,9 @@ std::ranges::borrowed_iterator_t<Range> get_one_of(Range&& r, Pred pred)
     return get_one_of(std::ranges::begin(r), std::ranges::end(r), pred);
 }
 
-template <std::input_iterator It, class Callback = callback_identity>
-    requires std::invocable<Callback, std::iter_reference_t<It>, int>
-std::string str_join(It first, It last, std::string_view delim, Callback callback = {})
+template <std::input_iterator It, class Proj = callback_identity>
+    requires std::invocable<Proj, std::iter_reference_t<It>, int>
+std::string str_join(It first, It last, std::string_view delim, Proj proj = {})
 {
     int index = 0;
     std::string result;
@@ -526,7 +526,7 @@ std::string str_join(It first, It last, std::string_view delim, Callback callbac
         if (it != first) {
             result += delim;
         }
-        auto&& elem = std::invoke(callback, *it, index);
+        auto&& elem = std::invoke(proj, *it, index);
         if constexpr (std::is_convertible_v<decltype(elem), std::string_view>) {
             result += std::string_view(elem);
         } else {
@@ -536,11 +536,11 @@ std::string str_join(It first, It last, std::string_view delim, Callback callbac
     return result;
 }
 
-template <std::ranges::input_range Range, class Callback = callback_identity>
-    requires std::invocable<Callback, std::ranges::range_reference_t<Range>, int>
-std::string str_join(Range&& r, std::string_view delim, Callback callback = {})
+template <std::ranges::input_range Range, class Proj = callback_identity>
+    requires std::invocable<Proj, std::ranges::range_reference_t<Range>, int>
+std::string str_join(Range&& r, std::string_view delim, Proj proj = {})
 {
-    return str_join(std::ranges::begin(r), std::ranges::end(r), delim, callback);
+    return str_join(std::ranges::begin(r), std::ranges::end(r), delim, proj);
 }
 
 #endif

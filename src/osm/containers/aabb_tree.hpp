@@ -10,8 +10,8 @@
 #include "fwd.hpp"
 
 
-// Data returned from query_nearest().
-// Extend this struct to add more data.
+// Default data returned from query_nearest().
+// Inherit this struct to add more data.
 struct aabb_tree_qdata
 {
     double sqdist;
@@ -21,21 +21,28 @@ struct aabb_tree_unsafe_ctor_t {
     explicit aabb_tree_unsafe_ctor_t() = default;
 };
 
+template <class T, int Dim>
+concept AabbQuery = std::same_as<T, glm::vec<Dim, double>> || std::same_as<T, ray<Dim>>;
+
+template <class Cb, class T, class QueryData>
+concept AabbObjIntersectCb = requires(Cb cb, const T& obj, QueryData& qdata) {
+    { std::invoke(cb, obj, qdata) } -> std::same_as<bool>;
+};
+
 // Axis-aligned bounding box tree.
 // 
-// - Static (can be built only once).
+// - Static (can only be built once).
 // - Does not own the objects stored. 
 // - Object type should be a pointer or a cheap-to-copy
 //   POD type that points to the actual data.
-// - Calling Traits::bbox(obj) should be free
-//   (ideally the object should store its own bbox).
+// - Calling any traits function should be free.
 //
 template <int N, class T, class Traits>
     requires AabbTraits<Traits, N, T>
 class aabb_tree
 {
 public:
-    using search_flags_type = typename Traits::search_flags_type;
+    using query_flags_t = typename Traits::query_flags_t;
 
 private:
     struct node 
@@ -43,9 +50,7 @@ private:
         struct internal_t
         {
             bbox<N> bbox;
-            // it's okay if this has a non-trivial dtor, since
-            // the active member will never be switched.
-            search_flags_type flags;
+            query_flags_t flags;
         };
         struct leaf_t {
             T obj;
@@ -87,17 +92,16 @@ public:
     DEFAULT_MOVE(aabb_tree)
 
     std::vector<T> query_intersecting_bboxes(
-        const bbox<N>& query_bbox, const search_flags_type& query_flags) const
+        const bbox<N>& query_bbox, const query_flags_t& filter_flags) const
     {
         std::vector<T> ret;
-
         // Good for upto 2^16 objects.
         types::small_vector<int, 16> search_nodeids;
 
         auto check_subtree = [&](int nidx) 
         {
             if (has_nodeid(nidx) && 
-                (query_flags & node_flags(m_nodes[nidx])).any() && 
+                (filter_flags & node_flags(m_nodes[nidx])).any() && 
                 query_bbox.intersects(node_bbox(m_nodes[nidx]))) 
             {
                 search_nodeids.push_back(nidx);
@@ -124,25 +128,28 @@ public:
 
     std::vector<T> query_intersecting_bboxes(const bbox<N>& query_bbox) const
     {
-        search_flags_type all_flags;
+        query_flags_t all_flags;
         all_flags.set(); // all bits 1
         return query_intersecting_bboxes(query_bbox, all_flags);
     }
 
     //
-    // Get the nearest object in the tree to the query (ray or point).
+    // Get the nearest object in the tree to the query.
     // Rays must be normalized.
     // \param obj_intersect_cb Callback fn to confirm intersection with object when query intersects its bbox.
-    // \param out_qdata Additional data about the intersection/object.
+    // \param out_qdata Data about the intersection/object.
     //
-    template <class QueryData = aabb_tree_qdata>
-    bool query_nearest(const auto& query, const search_flags_type& query_flags,
-        const param_range& dist_range, auto obj_intersect_cb, T& out_object, QueryData& out_qdata) const
+    template <class Query, class Cb, class QueryData = aabb_tree_qdata>
+        requires AabbQuery<Query, N> && AabbObjIntersectCb<Cb, T, QueryData>
+    bool query_nearest(
+        const Query& query, 
+        const query_flags_t& filter_flags,
+        const param_range& dist_range, 
+        Cb obj_intersect_cb, 
+        T& out_object,
+        QueryData& out_qdata
+    ) const
     {
-        static_assert(requires {
-            { std::invoke(obj_intersect_cb, std::declval<const T&>(), std::declval<QueryData&>()) } -> std::same_as<bool>;
-        }, "Invalid obj_intersect callback.");
-
         const T* best_object = nullptr;
         QueryData best_qdata{};
         best_qdata.sqdist = std::numeric_limits<double>::infinity();
@@ -154,7 +161,7 @@ public:
         {
             double sqdist = std::numeric_limits<double>::infinity();
             if (has_nodeid(nidx) && 
-                (query_flags & node_flags(m_nodes[nidx])).any() &&
+                (filter_flags & node_flags(m_nodes[nidx])).any() &&
                 query_intersects_bbox(query, dist_range, node_bbox(m_nodes[nidx]), sqdist) &&
                 sqdist < best_qdata.sqdist) 
             {
@@ -191,11 +198,17 @@ public:
         else { return false; }
     }
 
-    template <class QueryData = aabb_tree_qdata>
-    bool query_nearest(const auto& query,
-        const param_range& dist_range, auto obj_intersect_cb, T& out_object, QueryData& out_qdata) const
+    template <class Query, class Cb, class QueryData = aabb_tree_qdata>
+        requires AabbQuery<Query, N> && AabbObjIntersectCb<Cb, T, QueryData>
+    bool query_nearest(
+        const Query& query,
+        const param_range& dist_range,
+        Cb obj_intersect_cb,
+        T& out_object,
+        QueryData& out_qdata
+    ) const
     {
-        search_flags_type all_flags;
+        query_flags_t all_flags;
         all_flags.set(); // all bits 1
         return query_nearest(query, all_flags, dist_range, obj_intersect_cb, out_object, out_qdata);
     }
@@ -360,16 +373,16 @@ private:
         return is_leaf(n) ? traits().bbox(n.data.leaf.obj) : n.data.internal.bbox;
     }
 
-    inline const search_flags_type& node_flags(const node& n) const {
+    inline const query_flags_t& node_flags(const node& n) const {
         return is_leaf(n) ? traits().flags(n.data.leaf.obj) : n.data.internal.flags;
     }
 
-    inline Traits& traits() noexcept { return m_data.ebco_first(); }
-    inline const Traits& traits() const noexcept { return m_data.ebco_first(); }
+    inline Traits& traits() noexcept { return m_data.first(); }
+    inline const Traits& traits() const noexcept { return m_data.first(); }
 
     // Either -1 or 0.
-    inline int& rootidx_ref() noexcept { return m_data.ebco_second(); }
-    inline const int& rootidx_ref() const noexcept { return m_data.ebco_second(); }
+    inline int& rootidx_ref() noexcept { return m_data.second(); }
+    inline const int& rootidx_ref() const noexcept { return m_data.second(); }
 
 private:
     std::vector<node> m_nodes;

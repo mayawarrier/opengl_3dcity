@@ -1,4 +1,6 @@
 
+// todo: this code is a giant mess!
+
 #include <array>
 #include <charconv>
 
@@ -41,7 +43,7 @@ int main(int argc, char* argv[])
     }
 
     osm_gl_draw_data osmdata;
-    if (!read_osmfile("assets/maps/london.osm", osmdata)) {
+    if (!read_osmfile("assets/maps/testmap_larger.osm", osmdata)) {
         logERROR("Failed to read OSM map file");
         return -1;
     }
@@ -307,26 +309,6 @@ int main(int argc, char* argv[])
         glBindVertexArray(VAO_light);
         glDrawArrays(GL_TRIANGLES, 0, 36);
         glBindVertexArray(0);
-
-        //for (const auto& colr_range: osmdata.color_ranges)
-            //{
-            //    if (DRAW_TRIANGLES) 
-            //    {
-            //        glUniform3f(obj_color_loc, colr_range.color.r, colr_range.color.g, colr_range.color.b);
-            //        glDrawElements(GL_TRIANGLES, colr_range.count * 3, GL_UNSIGNED_INT, (void*)(colr_range.startidx * sizeof(uint32_t) * 3));
-            //    }
-
-            //    if (DRAW_WIREFRAME)
-            //    {
-            //        glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-            //        glUniform4f(obj_color_loc, 1.0f, 0, 0, 1.0f);
-            //        glDrawElements(GL_TRIANGLES, colr_range.count * 3, GL_UNSIGNED_INT, (void*)(colr_range.startidx * sizeof(uint32_t) * 3));
-            //        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-            //    }
-            //}
-
-        //glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-
 
         wnd.update();
     }
