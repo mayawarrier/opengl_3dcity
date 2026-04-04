@@ -11,7 +11,7 @@ set(SOURCES
     "src/glutils.cpp"
     "src/viewport.hpp"
     "src/viewport.cpp"
-    "src/osm/draw_data.hpp"
+    "src/osm/common_ext.hpp"
     "src/osm/common.hpp"
     "src/osm/containers/fwd.hpp"
     "src/osm/containers/way_network.hpp"
@@ -24,6 +24,8 @@ set(SOURCES
     "src/osm/comp_builders/buildings.cpp"
     "src/osm/comp_builders/highways.hpp"
     "src/osm/comp_builders/highways.cpp"
+    "src/osm/comp_builders/water.hpp"
+    "src/osm/comp_builders/water.cpp"
     "src/osm/osm.hpp"
     "src/osm/osm.cpp"
     "src/main.cpp")

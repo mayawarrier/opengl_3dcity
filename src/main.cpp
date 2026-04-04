@@ -43,7 +43,8 @@ int main(int argc, char* argv[])
     }
 
     osm_gl_draw_data osmdata;
-    if (!read_osmfile("assets/maps/testmap_larger.osm", osmdata)) {
+    bbox2d london_latlon_bbox(-0.14814, 51.49413, -0.08077, 51.51700); // lon is x, lat is y
+    if (!read_osmfile("assets/maps/londonv2.osm", osmdata, london_latlon_bbox)) {
         logERROR("Failed to read OSM map file");
         return -1;
     }
@@ -283,8 +284,10 @@ int main(int argc, char* argv[])
                 {
                     glm::vec3 colr;
                     switch (i) {
+                    case TRI_TYPE_GROUND:   colr = glm::vec3(1.f, 1.f, 1.f); break;
                     case TRI_TYPE_BUILDING: colr = glm::vec3(0.5f, 0.5f, 0.5f); break;
                     case TRI_TYPE_HIGHWAY:  colr = glm::vec3(0.1f, 0.1f, 0.1f); break;
+                    case TRI_TYPE_WATER:    colr = glm::vec3(0.2f, 0.2f, 0.8f); break;
                     default: assert(false);
                         break;
                     }

@@ -8,6 +8,7 @@
 #include <ranges>
 
 #include <osmium/osm/types.hpp>
+#include <osmium/osm/tag.hpp>
 #include <glm/glm.hpp>
 
 #ifdef NDEBUG
@@ -21,7 +22,7 @@
 #include <set>
 #endif
 
-#include "draw_data.hpp"
+#include "common_ext.hpp"
 #include "../utils.hpp"
 
 
@@ -136,75 +137,6 @@ private:
     double m_min2, m_max2;
 
 };
-
-// Axis-aligned bounding box.
-template <int N>
-struct bbox
-{
-    using vec_t = glm::vec<N, double>;
-    vec_t min;
-    vec_t max;
-
-    // Invalid by default, must be extended.
-    bbox() : 
-        min(vec_t(std::numeric_limits<double>::infinity())), 
-        max(vec_t(-std::numeric_limits<double>::infinity())) 
-    {}
-
-    bbox(const vec_t& min, const vec_t& max) : 
-        min(min), max(max) 
-    {
-        assert(glm::all(glm::lessThanEqual(min, max)));
-    }
-    
-    void extend(const bbox& other)
-    {
-        this->min = glm::min(this->min, other.min);
-        this->max = glm::max(this->max, other.max);
-    }
-
-    void extend(const vec_t& point)
-    {
-        this->min = glm::min(this->min, point);
-        this->max = glm::max(this->max, point);
-    }
-
-    vec_t center() const {
-        return (min + max) / 2.0;
-    }
-
-    // Scale all dimensions by a factor, keeping center fixed.
-    bbox<N> scaled(double scale) const
-    {
-        vec_t center = this->center();
-        vec_t half_vec = (this->max - this->min) / 2.0;
-        vec_t new_half_vec = half_vec * scale;
-        return { center - new_half_vec, center + new_half_vec };
-    }
-
-    // Scale area by a factor, keeping center fixed.
-    bbox<N> scaled_by_area(double area_scale) const {
-        return scaled(std::sqrt(area_scale));
-    }
-
-    bool intersects(const bbox& rhs) const {
-        return
-            glm::all(glm::lessThanEqual(this->min, rhs.max)) &&
-            glm::all(glm::greaterThanEqual(this->max, rhs.min));
-    }
-
-    bool inside(const bbox& outer) const {
-        return 
-            glm::all(glm::greaterThanEqual(this->min, outer.min)) &&
-            glm::all(glm::lessThanEqual(this->max, outer.max));
-    }
-};
-
-// 2D axis-aligned bounding box
-using bbox2d = bbox<2>; 
-// 3D axis-aligned bounding box
-using bbox3d = bbox<3>; 
-
 
 enum osm_obj_type
 {
@@ -370,5 +302,18 @@ private:
 
 using osm_tri_dataf = osm_tri_data<float>;
 using osm_tri_datad = osm_tri_data<double>;
+
+inline bool is_multipolygon(const osmium::TagList& tags) {
+    const char* type = tags["type"];
+    return type && (!std::strcmp(type, "multipolygon") || !std::strcmp(type, "boundary"));
+}
+
+inline bool is_underground(const osmium::TagList& tags)
+{
+    const char* tunnel = tags["tunnel"];
+    const char* location = tags["location"];
+    return (tunnel && !std::strcmp(tunnel, "yes")) || 
+        (location && !std::strcmp(location, "underground"));
+}
 
 #endif

@@ -1,5 +1,3 @@
-#ifndef OSM_MESH_BUILDINGS_IMPL_HPP
-#define OSM_MESH_BUILDINGS_IMPL_HPP
 
 #include <osmium/osm/node_ref_list.hpp>
 #include <osmium/osm/way.hpp>
@@ -379,29 +377,6 @@ private:
     logger m_logger;
 };
 
-
-static inline glm::u32vec3 tri_indices(glm::u32vec3 indices, bool rev_winding) {
-    return rev_winding ? glm::u32vec3(indices[0], indices[2], indices[1]) : indices;
-}
-
-static uint32_t dd_add_polygon(osm_tri_datad& dd, const auto& nodes,
-    std::span<const uint32_t> indices, double height, bool rev_winding = false)
-{
-    uint32_t vert_startidx = dd.num_verts();
-    for (const auto& node : nodes) {
-        dd.add_vertex({ vert_x(node), vert_y(node), height });
-    }
-    for (size_t i = 0; i < indices.size(); i += 3)
-    {
-        uint32_t vidx0 = indices[i] + vert_startidx;
-        uint32_t vidx1 = indices[i + 1] + vert_startidx;
-        uint32_t vidx2 = indices[i + 2] + vert_startidx;
-        auto indices = tri_indices({ vidx0, vidx1, vidx2 }, rev_winding);
-        dd.add_triangle(indices, TRI_TYPE_BUILDING);
-    }
-    return vert_startidx;
-}
-
 static void dd_add_ring_sides(osm_tri_datad& dd, uint32_t num_verts,
     uint32_t bot_verts_idx, uint32_t top_verts_idx, orient_t ring_orient)
 {
@@ -436,8 +411,10 @@ static void generate_comp_mesh(osm_tri_datad& dd, const building_comp& comp, con
 
         assert(check_tris_winding(poly_nodes, tri_indices, ORIENT_CCW));
 
-        uint32_t bot_verts_idx = dd_add_polygon(dd, poly_nodes, tri_indices, comp.ht_btm * ent_db->ht_scale, true);
-        uint32_t top_verts_idx = dd_add_polygon(dd, poly_nodes, tri_indices, comp.ht_top * ent_db->ht_scale);
+        double ht_btm = comp.ht_btm * ent_db->ht_scale;
+        double ht_top = comp.ht_top * ent_db->ht_scale;
+        uint32_t bot_verts_idx = dd_add_polygon(dd, poly_nodes, tri_indices, ht_btm, TRI_TYPE_BUILDING, true);
+        uint32_t top_verts_idx = dd_add_polygon(dd, poly_nodes, tri_indices, ht_top, TRI_TYPE_BUILDING);
         
         auto& outer_ring = poly[0];
         uint32_t outer_size = uint32_t(outer_ring.size());
@@ -561,5 +538,3 @@ bool bldg_comp_builder::do_build_all(const mesh_entity_db* entity_db,
     out_tridata.push_back(std::move(dd));
     return true;
 }
-
-#endif

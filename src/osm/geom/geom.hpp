@@ -234,4 +234,30 @@ extern template double multipoly_coverage<osm_area::multipoly_t>(std::span<const
 extern template bool multipoly_covered_by<osm_area::multipoly_t>(const osm_area::multipoly_t&, const osm_area::multipoly_t&, double);
 extern template std::vector<uint32_t> polygon_triangulate<osm_area::poly_t>(const osm_area::poly_t&);
 
+// Get triangle vertex indices in correct winding order.
+inline glm::u32vec3 tri_indices(glm::u32vec3 indices, bool rev_winding) {
+    return rev_winding ? glm::u32vec3(indices[0], indices[2], indices[1]) : indices;
+}
+
+// Add a polygon to tri data. 
+// \return the starting vertex index of the polygon.
+uint32_t dd_add_polygon(osm_tri_datad& dd, const auto& nodes, 
+    std::span<const uint32_t> indices, double height, osm_tri_type tri_type, 
+    bool rev_winding = false)
+{
+    uint32_t vert_startidx = dd.num_verts();
+    for (const auto& node : nodes) {
+        dd.add_vertex({ vert_x(node), vert_y(node), height });
+    }
+    for (size_t i = 0; i < indices.size(); i += 3)
+    {
+        uint32_t vidx0 = indices[i] + vert_startidx;
+        uint32_t vidx1 = indices[i + 1] + vert_startidx;
+        uint32_t vidx2 = indices[i + 2] + vert_startidx;
+        auto indices = tri_indices({ vidx0, vidx1, vidx2 }, rev_winding);
+        dd.add_triangle(indices, tri_type);
+    }
+    return vert_startidx;
+}
+
 #endif

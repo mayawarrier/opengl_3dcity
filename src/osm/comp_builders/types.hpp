@@ -72,10 +72,11 @@ struct mesh_entity
 
 struct mesh_entity_db
 {
-    glm::dvec2 center;
-    // Scale heights by this factor to account for 
+    // Bbox of all entities.
+    bbox2d bbox;
+    // Height scale factor to account for 
     // distortion from mercator projection.
-    double ht_scale;
+    double ht_scale = 0.0;
 
     std::vector<osm_node> nodes;
     std::vector<osm_way> ways;

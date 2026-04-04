@@ -16,6 +16,7 @@
 
 #include "comp_builders/highways.hpp"
 #include "comp_builders/buildings.hpp"
+#include "comp_builders/water.hpp"
 #include "mesh_builder.hpp"
 
 #include "osm.hpp"
@@ -26,8 +27,12 @@
 class osm_reader
 {
 public:
-    explicit osm_reader(const std::string& filepath_or_url, osmium::area::AssemblerConfig area_assm_cfg = {}) :
+    explicit osm_reader(const std::string& filepath_or_url, 
+        const bbox2d& latlon_bounds, 
+        osmium::area::AssemblerConfig area_assm_cfg = {}
+    ) :
         m_file{ filepath_or_url },
+        m_latlon_bounds(latlon_bounds),
         m_area_assm_cfg(area_assm_cfg)
     {}
 
@@ -67,7 +72,9 @@ private:
         // First pass.
         bool new_relation(const osmium::Relation& relation) const
         {
-            if (is_multipolygon(relation.tags())) {
+            auto& tags = relation.tags();
+            if (is_multipolygon(tags) && !is_underground(tags)) 
+            {
                 return std::ranges::any_of(relation.members(), [](auto& member) {
                     return member.type() == osmium::item_type::way;
                 });
@@ -83,8 +90,7 @@ private:
 
             for (const auto& member : relation.members())
             {
-                if (member.ref() != 0) 
-                {
+                if (member.ref() != 0) {
                     // TNodes is true, might get nodes. 
                     // Ignore them because they can't be part of a multipolygon.
                     if (member.type() == osmium::item_type::node) {
@@ -92,12 +98,7 @@ private:
                     }
                     // should only have ways now!
                     assert(member.type() == osmium::item_type::way);
-
-                    auto* way = this->get_member_way(member.ref());
-                    if (!way->tags().empty()) {
-                        add_way_or_area(*way);
-                    }
-                    rel_ways.push_back(way);
+                    rel_ways.push_back(this->get_member_way(member.ref()));
                 }
             }
             osmium::area::Assembler assembler{ m_reader.m_area_assm_cfg };
@@ -106,43 +107,63 @@ private:
 
         // Second pass.
         void after_node(const osmium::Node& node) {
+            if (!loc_in_bounds(node.location())) return;
             m_mesh_builder.add_node(node);
         }
 
         // Second pass.
-        void way_not_in_any_relation(const osmium::Way& way) {
-            add_way_or_area(way);
-        }
-
-        // Second pass (from buffer).
-        void area(const osmium::Area& area) {
-            m_mesh_builder.add_area(area);
-        }
-
-    private:
-        void add_way_or_area(const osmium::Way& way)
+        void after_way(const osmium::Way& way) 
         {
             assert_msg(
-                way.nodes().front().location() && 
-                way.nodes().back().location(), 
+                way.nodes().front().location() &&
+                way.nodes().back().location(),
                 "Location errors should have been thrown earlier");
+
+            bool any_in_bounds = std::ranges::any_of(way.nodes(), [&](const auto& nr) {
+                return loc_in_bounds(nr.location());
+            });
+            if (!any_in_bounds) {
+                return;
+            }
 
             // is the way closed?
             if (way.nodes().size() >= 4 &&        // first and last node repeat 
                 way.ends_have_same_location() &&  // ids don't match sometimes
-                !way.tags().has_tag("area", "no")) 
+                !way.tags().has_tag("area", "no"))
             {
                 osmium::area::Assembler assembler{ m_reader.m_area_assm_cfg };
                 assembler(way, this->buffer());
-            } 
+            }
             else {
                 m_mesh_builder.add_way(way);
             }
         }
 
-        bool is_multipolygon(const osmium::TagList& tags) const {
-            const char* type = tags["type"];
-            return type && (!std::strcmp(type, "multipolygon") || !std::strcmp(type, "boundary"));
+        // Second pass (from buffer).
+        void area(const osmium::Area& area) 
+        {
+            bool any_in_bounds = false;
+            for (const auto& outer_ring : area.outer_rings()) {
+                for (const auto& nr : outer_ring) {
+                    if (loc_in_bounds(nr.location())) {
+                        any_in_bounds = true;
+                        goto end;
+                    }
+                }
+            }
+            end:
+            if (!any_in_bounds) { 
+                return; 
+            }
+
+            m_mesh_builder.add_area(area);
+        }
+
+    private:
+        bool loc_in_bounds(const osmium::Location& loc) {
+            double lat = loc.lat();
+            double lon = loc.lon();
+            return m_reader.m_latlon_bounds.contains({ lon, lat });
         }
 
     private:
@@ -151,21 +172,23 @@ private:
     };
 
 private:
-    const osmium::io::File m_file;
+    osmium::io::File m_file;
+    bbox2d m_latlon_bounds;
     osmium::area::AssemblerConfig m_area_assm_cfg;
 };
 
 
-bool read_osmfile(const std::string& filepath_or_url, osm_gl_draw_data& out_data)
+bool read_osmfile(const std::string& filepath_or_url, osm_gl_draw_data& out_data, const bbox2d& latlon_bounds)
 {
     osm_mesh_builder<
-        bldg_comp_builder, 
-        highway_comp_builder
+        bldg_comp_builder,
+        highway_comp_builder,
+        water_comp_builder
     > mesh_builder;
 
     try {
         log_func("Reading OSM file", [&]() {
-            osm_reader reader(filepath_or_url);
+            osm_reader reader(filepath_or_url, latlon_bounds);
             reader.read_all(mesh_builder);
         });
     }

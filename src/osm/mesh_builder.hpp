@@ -75,6 +75,7 @@ public:
             .name = name ? name : ""
         });
 
+        m_entity_db.bbox.extend(bbox);
         return true;
     }
 
@@ -150,6 +151,7 @@ public:
             .name = name ? name : ""
         });
 
+        m_entity_db.bbox.extend(bbox);
         return true;
     }
 
@@ -178,6 +180,18 @@ public:
         if (!ret) {
             return false;
         }
+
+        osm_tri_datad bbox_dd;
+        const double ground_offset = -10.0;
+        uint32_t vert_startidx = bbox_dd.num_verts();
+        bbox_dd.add_vertex(glm::dvec3(m_entity_db.bbox.min.x, m_entity_db.bbox.min.y, ground_offset));
+        bbox_dd.add_vertex(glm::dvec3(m_entity_db.bbox.max.x, m_entity_db.bbox.min.y, ground_offset));
+        bbox_dd.add_vertex(glm::dvec3(m_entity_db.bbox.max.x, m_entity_db.bbox.max.y, ground_offset));
+        bbox_dd.add_vertex(glm::dvec3(m_entity_db.bbox.min.x, m_entity_db.bbox.max.y, ground_offset));
+        bbox_dd.add_triangle_w_offset({ 0, 1, 2 }, vert_startidx, TRI_TYPE_GROUND);
+        bbox_dd.add_triangle_w_offset({ 0, 2, 3 }, vert_startidx, TRI_TYPE_GROUND);
+
+        tri_data.push_back(std::move(bbox_dd));
 
         log_func("Computing normals", [&]()
         {
@@ -311,7 +325,7 @@ private:
 
     bool finalize_entity_db()
     {
-        m_entity_db.center = m_center;
+        //m_entity_db.center = m_center;
         double center_lat = osmium::geom::detail::y_to_lat(m_center.y);
         m_entity_db.ht_scale = 1.0 / std::cos(glm::radians(center_lat));
 

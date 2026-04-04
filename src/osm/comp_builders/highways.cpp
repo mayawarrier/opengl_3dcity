@@ -1,13 +1,4 @@
 
-#ifndef OSM_MESH_STREETS_IMPL_HPP
-#define OSM_MESH_STREETS_IMPL_HPP
-
-#include <vector>
-#include <algorithm>
-#include <utility>
-#include <span>
-#include <osmium/osm/node_ref_list.hpp>
-
 #include "../geom/geom.hpp"
 #include "../mesh_builder.hpp"
 
@@ -104,7 +95,6 @@ bool highway_comp_builder::do_build_all(const mesh_entity_db* entity_db,
     });
 
     osm_tri_datad dd;
-
     timed_section("Triangulating paths", [&]() {
         for (const auto& street : all_paths) {
             gen_path_drawdata(dd, street, entity_db, highways, eps);
@@ -122,5 +112,3 @@ bool highway_comp_builder::do_build_all(const mesh_entity_db* entity_db,
 
     return true;
 }
-
-#endif

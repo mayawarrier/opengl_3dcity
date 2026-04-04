@@ -2,6 +2,8 @@
 #ifndef OSM_MESH_STREETS_HPP
 #define OSM_MESH_STREETS_HPP
 
+#include <osmium/osm/way.hpp>
+
 #include "types.hpp"
 #include "buildings.hpp"
 
@@ -50,9 +52,8 @@ struct highway_comp_builder
         if (obj->type() == osmium::item_type::way)
         {
             auto* way = static_cast<const osmium::Way*>(obj);
-            assert(!way->is_closed()); // closed ways should be areas
 
-            int type = get_highway_type(*way);
+            int type = get_highway_type(way->tags());
             if (type != -1)
             {
                 auto htype = (highway_type)type;
@@ -61,7 +62,7 @@ struct highway_comp_builder
                 comps_vec.push_back({
                     .entity_idx = entity_idx,
                     .type = htype,
-                    .width = get_highway_width(*way, htype)
+                    .width = get_highway_width(way->tags(), htype)
                 });
                 comps_info.push_back({
                     .type = COMP_TYPE_HIGHWAY,
@@ -92,9 +93,9 @@ private:
     // Type of highway based on its tags. 
     // Returns -1 if not a highway and HIGHWAY_TYPE_UNKNOWN if 
     // the highway tag is present but unrecognized.
-    static int get_highway_type(const osmium::Way& way)
+    static int get_highway_type(const osmium::TagList& tags)
     {
-        const char* highway = way.tags()["highway"];
+        const char* highway = tags["highway"];
         if (!highway) {
             return -1;
         }
@@ -117,9 +118,11 @@ private:
 
         if (std::strcmp(highway, "footway") == 0)
         {
-            const char* footway = way.tags()["footway"];
-            if (footway && std::strcmp(footway, "sidewalk") == 0) return HIGHWAY_TYPE_FOOTWAY_SIDEWALK;
-            if (footway && std::strcmp(footway, "crossing") == 0) return HIGHWAY_TYPE_FOOTWAY_CROSSING;
+            const char* footway = tags["footway"];
+            if (footway) {
+                if (std::strcmp(footway, "sidewalk") == 0) return HIGHWAY_TYPE_FOOTWAY_SIDEWALK;
+                if (std::strcmp(footway, "crossing") == 0) return HIGHWAY_TYPE_FOOTWAY_CROSSING;
+            }
             return HIGHWAY_TYPE_FOOTWAY;
         }
 
@@ -127,41 +130,43 @@ private:
     }
 
     // Width of a highway type in meters. Uses the width tag if present.
-    // Returns -1 if type is invalid or for highways with tag area=yes.
-    static double get_highway_width(const osmium::Way& way, highway_type type)
+    static double get_highway_width(const osmium::TagList& tags, highway_type type)
     {
-        if (way.tags().has_tag("area", "yes")) {
-            return -1.0;
-        }
+        assert(!tags.has_tag("area", "yes"));
 
         double width;
+        if (parse_num(tags["width"], width)) {
+            return width;
+        }
+
+        // pixel widths at zoom 17 from carto
         switch (type)
         {
-        case HIGHWAY_TYPE_MOTORWAY:         width = 18.0;  break;
-        case HIGHWAY_TYPE_TRUNK:            width = 18.0;  break;
-        case HIGHWAY_TYPE_PRIMARY:          width = 18.0;  break;
-        case HIGHWAY_TYPE_SECONDARY:        width = 18.0;  break;
-        case HIGHWAY_TYPE_TERTIARY:         width = 18.0;  break;
-        case HIGHWAY_TYPE_MOTORWAY_LINK:    width = 12.0;  break;
-        case HIGHWAY_TYPE_TRUNK_LINK:       width = 12.0;  break;
-        case HIGHWAY_TYPE_PRIMARY_LINK:     width = 12.0;  break;
-        case HIGHWAY_TYPE_SECONDARY_LINK:   width = 12.0;  break;
-        case HIGHWAY_TYPE_TERTIARY_LINK:    width = 12.0;  break;
-        case HIGHWAY_TYPE_UNCLASSIFIED:     width = 12.0;  break;
-        case HIGHWAY_TYPE_RESIDENTIAL:      width = 12.0;  break;
-        case HIGHWAY_TYPE_LIVING_STREET:    width = 12.0;  break;
-        case HIGHWAY_TYPE_PEDESTRIAN:       width = 12.0;  break;
-        case HIGHWAY_TYPE_SERVICE:          width = 7.0;   break;
+        case HIGHWAY_TYPE_MOTORWAY:         width = 18.0; break;
+        case HIGHWAY_TYPE_TRUNK:            width = 18.0; break;
+        case HIGHWAY_TYPE_PRIMARY:          width = 18.0; break;
+        case HIGHWAY_TYPE_SECONDARY:        width = 18.0; break;
+        case HIGHWAY_TYPE_TERTIARY:         width = 18.0; break;
+        case HIGHWAY_TYPE_MOTORWAY_LINK:    width = 12.0; break;
+        case HIGHWAY_TYPE_TRUNK_LINK:       width = 12.0; break;
+        case HIGHWAY_TYPE_PRIMARY_LINK:     width = 12.0; break;
+        case HIGHWAY_TYPE_SECONDARY_LINK:   width = 12.0; break;
+        case HIGHWAY_TYPE_TERTIARY_LINK:    width = 12.0; break;
+        case HIGHWAY_TYPE_UNCLASSIFIED:     width = 12.0; break;
+        case HIGHWAY_TYPE_RESIDENTIAL:      width = 12.0; break;
+        case HIGHWAY_TYPE_LIVING_STREET:    width = 12.0; break;
+        case HIGHWAY_TYPE_PEDESTRIAN:       width = 12.0; break;
+        case HIGHWAY_TYPE_SERVICE:          width = 7.0;  break;
         case HIGHWAY_TYPE_FOOTWAY:
         case HIGHWAY_TYPE_FOOTWAY_SIDEWALK:
-        case HIGHWAY_TYPE_FOOTWAY_CROSSING: width = 1.3;   break;
+        case HIGHWAY_TYPE_FOOTWAY_CROSSING: width = 1.3;  break;
         case HIGHWAY_TYPE_UNKNOWN:
-        case HIGHWAY_TYPE_ROAD:             width = 7.0;   break;
+        case HIGHWAY_TYPE_ROAD:             width = 7.0;  break;
         default:
             assert(false);
             return -1.0;
         }
-        // roughly convert from carto's pixel-based widths
+        // scale to meters
         return width * (50.0 / 58.0);
     }
 
