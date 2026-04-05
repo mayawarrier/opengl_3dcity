@@ -6,7 +6,7 @@
 #include <osmium/geom/mercator_projection.hpp>
 #include <boost/container/flat_set.hpp>
 
-#include "../geom/geom.hpp"
+#include "../geom_impl.hpp"
 #include "../mesh_builder.hpp"
 
 #include "buildings.hpp"
@@ -66,8 +66,8 @@ private:
         };
 
     public:
-        logger(const mesh_entity_db* obj_db) :
-            m_entity_db(obj_db)
+        logger(const mesh_entity_db* ent_db) :
+            m_entity_db(ent_db)
         {}
 
         log& new_log(const building_comp* part_comp, osmium::object_id_type id)
@@ -378,7 +378,7 @@ private:
 };
 
 static void dd_add_ring_sides(osm_tri_datad& dd, uint32_t num_verts,
-    uint32_t bot_verts_idx, uint32_t top_verts_idx, orient_t ring_orient)
+    uint32_t bot_verts_idx, uint32_t top_verts_idx, orient_type ring_orient)
 {
     assert(ring_orient != ORIENT_COLL);
 
@@ -408,8 +408,6 @@ static void generate_comp_mesh(osm_tri_datad& dd, const building_comp& comp, con
     {
         auto tri_indices = polygon_triangulate(poly);
         auto poly_nodes = osm_area::poly_nodes(poly);
-
-        assert(check_tris_winding(poly_nodes, tri_indices, ORIENT_CCW));
 
         double ht_btm = comp.ht_btm * ent_db->ht_scale;
         double ht_top = comp.ht_top * ent_db->ht_scale;

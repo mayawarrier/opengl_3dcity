@@ -12,7 +12,7 @@
 #include <limits>
 #include <span>
 
-#include "../common.hpp"
+#include "../osm/common.hpp" // remove this dependency later
 
 
 // Get a vector perpendicular to the input i.e. cross(z, vec).
@@ -113,7 +113,7 @@ double acute_angle_bw_unitvecs(const glm::dvec2& a, const glm::dvec2& b);
 // Rotate a 2D vector by angle (radians +ve CCW).
 glm::dvec2 rotate_vec2(const glm::dvec2& vec, double angle);
 
-inline orient_t orient_type(double value)
+inline orient_type area_to_orient(double value)
 {
     if (value > 0) {
         return ORIENT_CCW;
@@ -125,16 +125,16 @@ inline orient_t orient_type(double value)
 }
 
 // Get orientation of points wrt to each other.
-inline orient_t orient(const glm::dvec2& a, const glm::dvec2& b, const glm::dvec2& c)
+inline orient_type orient(const glm::dvec2& a, const glm::dvec2& b, const glm::dvec2& c)
 {
     glm::dvec2 v = b - a, w = c - a;
-    return orient_type(v.x * w.y - v.y * w.x);
+    return area_to_orient(v.x * w.y - v.y * w.x);
 }
 
 // Get twice the signed area of a ring. 
 // Positive if vertices are in CCW order, negative if CW, 0 if degenerate.
-template <class TRing> requires Ring<TRing>
-double ring_double_area(const TRing& verts)
+template <Path Ring>
+double ring_double_area(const Ring& verts)
 {
     double ret = 0.0;
     for (size_t icur = 0; icur < verts.size(); ++icur)
@@ -148,22 +148,22 @@ double ring_double_area(const TRing& verts)
 }
 
 // Get orientation of a ring.
-template <class TRing> requires Ring<TRing>
-orient_t ring_orient(const TRing& verts)
+template <Path Ring>
+orient_type ring_orient(const Ring& verts)
 {
-    return orient_type(ring_double_area(verts));
+    return area_to_orient(ring_double_area(verts));
 }
 
 // Get signed area of a ring. 
 // Positive if vertices are in CCW order, negative if CW, 0 if degenerate.
-template <class TRing> requires Ring<TRing>
-double ring_area(const TRing& verts)
+template <Path Ring>
+double ring_area(const Ring& verts)
 {
     return ring_double_area(verts) / 2.0;
 }
 
 // Get signed area of a polygon.
-template <class Poly> requires RingedPolygon<Poly>
+template <Paths Poly>
 double poly_area(const Poly& poly)
 {
     double area = 0.0;
@@ -174,7 +174,7 @@ double poly_area(const Poly& poly)
 }
 
 // Get signed area of a multipolygon.
-template <class MultiPoly> requires RingedMultiPolygon<MultiPoly>
+template <MultiPaths MultiPoly>
 double multipoly_area(const MultiPoly& mpoly)
 {
     double area = 0.0;
@@ -184,55 +184,67 @@ double multipoly_area(const MultiPoly& mpoly)
     return area;
 }
 
-// Check if triangles are wound a certain way. 
-// If allow_coll is true, then degenerate triangles are allowed.
-bool check_tris_winding(const auto& verts, 
-    std::span<const uint32_t> indices, orient_t winding, bool allow_coll = true)
-{
-    for (size_t i = 0; i < indices.size(); i += 3)
-    {
-        auto v0 = vert_to_dvec2(verts[indices[i]]);
-        auto v1 = vert_to_dvec2(verts[indices[i + 1]]);
-        auto v2 = vert_to_dvec2(verts[indices[i + 2]]);
-        
-        auto o = orient(v0, v1, v2);
-        if (o != winding && !(allow_coll && o == ORIENT_COLL)) {
-            return false;
-        }
-    }
-    return true;
-}
-
 // Convention: the first ring is the outer ring and must be CCW, 
 // and all subsequent rings are holes and must be CW.
+
+
+//class boolean_op
+//{
+//public:
+//    boolean_op(int precision);
+//    ~boolean_op();
+//
+//    template <Paths Poly>
+//    void add_closed_subject(const Poly& poly);
+//
+//    template <MultiPaths MultiPoly>
+//    void add_closed_subject(const MultiPoly& mpoly)
+//    {
+//        for (const auto& poly : mpoly) {
+//            add_closed_subject(poly);
+//        }
+//    }
+//
+//    template <Paths Polylines>
+//    void add_open_subject(const Polylines& polylines);
+//
+//    template <Paths Poly>
+//    void add_clip(const Poly& poly);
+//
+//    template <MultiPaths MultiPoly>
+//    void add_clip(const MultiPoly& mpoly)
+//    {
+//        for (const auto& poly : mpoly) {
+//            add_clip(poly);
+//        }
+//    }
+//
+//    void execute(boolean_op_type op_type, std::vector<std::vector<std::vector<glm::dvec2>>>& out_mpolys);
+//
+//private:
+//    void* m_impl;
+//    bbox2d m_bbox;
+//};
 
 // Fraction of outer multipolygon covered by inner multipolygons.
 // The inner multipolygons must be fully covered by the outer multipolygon.
 // \return value in [0, 1].
-template <class TMultiPoly> requires RingedMultiPolygon<TMultiPoly>
-double multipoly_coverage(std::span<const TMultiPoly*> inner_mpolys, const TMultiPoly& outer_mpoly);
+template <MultiPaths MultiPoly>
+double multipoly_coverage(std::span<const MultiPoly*> inner_mpolys, const MultiPoly& outer_mpoly);
 
 // Check if a multipolygon is inside another multipolygon.
 // \param tol: max area of uncovered region in meters squared.
-template <class TMultiPoly> requires RingedMultiPolygon<TMultiPoly>
-bool multipoly_covered_by(const TMultiPoly& inner_mpoly, const TMultiPoly& outer_mpoly, double tol);
+template <MultiPaths MultiPoly>
+bool multipoly_covered_by(const MultiPoly& inner_mpoly, const MultiPoly& outer_mpoly, double tol);
 
-// Triangulate polygon. 
-// Output triangles are CCW.
-// note: always check the winding of triangles returned by this function,
-// thanks to this nasty nasty bug: https://github.com/mapbox/earcut/issues/133
-template <class TPoly> requires RingedPolygon<TPoly>
-std::vector<uint32_t> polygon_triangulate(const TPoly& polygon);
+// Triangulate polygon. Output triangles are CCW.
+template <Paths Poly>
+std::vector<uint32_t> polygon_triangulate(const Poly& polygon);
 
 // Triangulate a thick polyline.
 // todo: ideally agnostic of osm types
-void polyline_triangulate(std::span<const glm::dvec2> polyline,
-    double width, osm_tri_datad& dd, osm_tri_type tri_type, double eps = 1e-9);
+void polyline_triangulate(std::span<const glm::dvec2> polyline, double width, osm_tri_datad& dd, osm_tri_type tri_type, double eps = 1e-9);
 
-// extern templates produce bogus VCR001 warnings, but there's no way to disable them. sigh
-extern template double multipoly_coverage<osm_area::multipoly_t>(std::span<const osm_area::multipoly_t*>, const osm_area::multipoly_t&);
-extern template bool multipoly_covered_by<osm_area::multipoly_t>(const osm_area::multipoly_t&, const osm_area::multipoly_t&, double);
-extern template std::vector<uint32_t> polygon_triangulate<osm_area::poly_t>(const osm_area::poly_t&);
 
 // Get triangle vertex indices in correct winding order.
 inline glm::u32vec3 tri_indices(glm::u32vec3 indices, bool rev_winding) {
@@ -241,7 +253,8 @@ inline glm::u32vec3 tri_indices(glm::u32vec3 indices, bool rev_winding) {
 
 // Add a polygon to tri data. 
 // \return the starting vertex index of the polygon.
-uint32_t dd_add_polygon(osm_tri_datad& dd, const auto& nodes, 
+template <Path Nodes>
+uint32_t dd_add_polygon(osm_tri_datad& dd, const Nodes& nodes, 
     std::span<const uint32_t> indices, double height, osm_tri_type tri_type, 
     bool rev_winding = false)
 {

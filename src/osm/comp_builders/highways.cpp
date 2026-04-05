@@ -1,5 +1,5 @@
 
-#include "../geom/geom.hpp"
+#include "../geom_impl.hpp"
 #include "../mesh_builder.hpp"
 
 #include "highways.hpp"

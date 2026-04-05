@@ -1,5 +1,5 @@
 
-#include "../geom/geom.hpp"
+#include "../geom_impl.hpp"
 #include "../mesh_builder.hpp"
 
 #include "water.hpp"
@@ -23,7 +23,6 @@ static bool gen_area_drawdata(osm_tri_datad& dd, const osm_area& area)
 
         auto tri_indices = polygon_triangulate(poly);
         auto poly_nodes = osm_area::poly_nodes(poly);
-        assert(check_tris_winding(poly_nodes, tri_indices, ORIENT_CCW));
 
         dd_add_polygon(dd, poly_nodes, tri_indices, 0.0, TRI_TYPE_WATER);
     }

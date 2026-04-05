@@ -97,7 +97,7 @@ public:
         std::vector<std::tuple<int, int, int>> ring_bounds;
 
         auto add_ring = [&](int poly_idx, 
-            const auto& ring, orient_t desired_orient, auto get_node)
+            const auto& ring, orient_type desired_orient, auto get_node)
         {
             assert(ring.is_closed() && ring.size() >= 3);
 

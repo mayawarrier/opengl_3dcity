@@ -26,7 +26,7 @@
 #include "../utils.hpp"
 
 
-enum orient_t
+enum orient_type
 {
     ORIENT_CW = -1,  // clockwise
     ORIENT_COLL = 0, // collinear
@@ -224,21 +224,24 @@ concept Vertex = requires(const TVert& vert)
     { vert_y(vert) } -> std::convertible_to<double>;
 };
 
-template <class TRing>
-concept Ring = 
-    std::ranges::contiguous_range<TRing> && 
-    Vertex<std::ranges::range_value_t<TRing>>;
+template <class T>
+concept Path = 
+    std::ranges::contiguous_range<T> && 
+    Vertex<std::ranges::range_value_t<T>>;
 
-template <class TPoly>
-concept RingedPolygon = 
-    std::ranges::contiguous_range<TPoly> && 
-    Ring<std::ranges::range_value_t<TPoly>>;
+template <class T>
+concept Paths = 
+    std::ranges::contiguous_range<T> && 
+    Path<std::ranges::range_value_t<T>>;
 
-template <class TMultiPoly>
-concept RingedMultiPolygon = 
-    std::ranges::contiguous_range<TMultiPoly> && 
-    RingedPolygon<std::ranges::range_value_t<TMultiPoly>>;
+template <class T>
+concept MultiPaths = 
+    std::ranges::contiguous_range<T> && 
+    Paths<std::ranges::range_value_t<T>>;
 
+template <Paths T>
+using path_vertex_t = 
+    std::ranges::range_value_t<std::ranges::range_value_t<T>>;
 
 struct osm_tri
 {
